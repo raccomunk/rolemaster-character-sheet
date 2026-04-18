@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Rolemaster">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#334155" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="12" fill="url(#bg)" />
+  <path d="M16 48V16h16c8 0 13 4 13 11 0 5-2 8-7 10l8 11H35l-7-10h-4v10H16zm8-16h8c3 0 5-2 5-5s-2-5-5-5h-8v10z" fill="#f8fafc" />
+</svg>
