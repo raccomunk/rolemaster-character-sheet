@@ -191,8 +191,8 @@ type CharacterSheet = {
   };
   magic: {
     currentPP: number;
-    spellAdder: number;
-    spellMultiplier: number;
+    spellAdder: string;
+    spellMultiplier: string;
   };
   exhaustion: {
     currentEP: number;
@@ -454,6 +454,10 @@ function exhaustionPenalty(percent: number) {
   return -100;
 }
 
+function thresholdAt(total: number, percent: number) {
+  return Math.ceil((Math.max(0, total) * percent) / 100);
+}
+
 type DicePair = { die1: number; die2: number };
 
 type DpSpendEntry = {
@@ -601,6 +605,12 @@ function migrateSheet(parsed: any): CharacterSheet {
   if (!Array.isArray(s.skills)) {
     (s as any).skills = [];
   }
+  if (typeof s.magic?.spellAdder !== "string") {
+    (s.magic as any).spellAdder = s.magic?.spellAdder == null ? "" : String(s.magic.spellAdder);
+  }
+  if (typeof s.magic?.spellMultiplier !== "string") {
+    (s.magic as any).spellMultiplier = s.magic?.spellMultiplier == null ? "" : String(s.magic.spellMultiplier);
+  }
   s.skills = s.skills.map((skill) => ({
     ...skill,
     newRanks: typeof (skill as any).newRanks === "number" ? (skill as any).newRanks : 1,
@@ -719,8 +729,8 @@ function makeDefaultSheet(): CharacterSheet {
     },
     magic: {
       currentPP: 0,
-      spellAdder: 0,
-      spellMultiplier: 1,
+      spellAdder: "",
+      spellMultiplier: "",
     },
     exhaustion: {
       currentEP: 0,
@@ -750,6 +760,12 @@ function NumberInput({ value, onChange, className = "", min }: { value: number; 
       onFocus={(e) => {
         setFocused(true);
         setLocalValue(e.target.value);
+      }}
+      onWheel={(e) => {
+        // Prevent accidental value changes from mouse wheel while allowing page scroll.
+        if (document.activeElement === e.currentTarget) {
+          e.currentTarget.blur();
+        }
       }}
       onChange={(e) => {
         const raw = e.target.value;
@@ -1093,7 +1109,7 @@ export default function RolemasterCharacterSheetEngine() {
 
   const raceExhaustionBonus = parseExhaustionBonusFromRaceNotes(selectedRace.specialNotes);
   const totalHits = Math.max(0, bodyDevelopmentTotal);
-  const totalPP = Math.max(0, (powerPointTotal + sheet.magic.spellAdder) * Math.max(1, sheet.magic.spellMultiplier));
+  const totalPP = Math.max(0, powerPointTotal);
   const totalEP = Math.max(0, 40 + statTotals["Constitution"].total * 3 + raceExhaustionBonus + sheet.exhaustion.specialBonus);
 
   const currentHitsPool = Math.max(0, totalHits - sheet.health.currentHits);
@@ -1103,6 +1119,21 @@ export default function RolemasterCharacterSheetEngine() {
   const healthPercent = pctUsed(sheet.health.currentHits, totalHits);
   const magicPercent = pctUsed(sheet.magic.currentPP, totalPP);
   const exhaustionPercent = pctUsed(sheet.exhaustion.currentEP, totalEP);
+
+  const healthThreshold25 = thresholdAt(totalHits, 25);
+  const healthThreshold50 = thresholdAt(totalHits, 50);
+  const healthThreshold75 = thresholdAt(totalHits, 75);
+  const healthThreshold100 = thresholdAt(totalHits, 100);
+
+  const magicThreshold25 = thresholdAt(totalPP, 25);
+  const magicThreshold50 = thresholdAt(totalPP, 50);
+  const magicThreshold75 = thresholdAt(totalPP, 75);
+
+  const exhaustionThreshold25 = thresholdAt(totalEP, 25);
+  const exhaustionThreshold50 = thresholdAt(totalEP, 50);
+  const exhaustionThreshold75 = thresholdAt(totalEP, 75);
+  const exhaustionThreshold90 = thresholdAt(totalEP, 90);
+  const exhaustionThreshold100 = thresholdAt(totalEP, 100);
 
   const sortByCatThenName = (a: { name: string; category?: { name: string } | null }, b: { name: string; category?: { name: string } | null }) => {
     const catA = a.category?.name ?? "";
@@ -2601,9 +2632,6 @@ export default function RolemasterCharacterSheetEngine() {
                     <label className="mb-1 block text-sm">Current Hits Taken</label>
                     <NumberInput value={sheet.health.currentHits} onChange={(v) => updateSheet((prev) => ({ ...prev, health: { ...prev.health, currentHits: clampNumber(v) } }))} />
                   </div>
-                  <div className="rounded-2xl border p-3 text-sm">
-                    Penalty: {healthPenalty(healthPercent) === -999 ? "Unconscious" : healthPenalty(healthPercent)}
-                  </div>
                   {(["stunned", "stunNoParry", "downAndOut", "bleedPerRound"] as const).map((key) => (
                     <div key={key}>
                       <label className="mb-1 block text-sm">{key === "stunNoParry" ? "Stun no parry" : key === "downAndOut" ? "Down & Out" : key === "bleedPerRound" ? "Bleed/round" : "Stunned"}</label>
@@ -2625,13 +2653,20 @@ export default function RolemasterCharacterSheetEngine() {
                   </div>
                   <div>
                     <label className="mb-1 block text-sm">Spell Adder</label>
-                    <NumberInput value={sheet.magic.spellAdder} onChange={(v) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellAdder: v } }))} />
+                    <Input
+                      type="text"
+                      value={sheet.magic.spellAdder}
+                      onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellAdder: e.target.value } }))}
+                    />
                   </div>
                   <div>
                     <label className="mb-1 block text-sm">Spell Multiplier</label>
-                    <NumberInput value={sheet.magic.spellMultiplier} onChange={(v) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellMultiplier: clampNumber(v, 1) } }))} min={1} />
+                    <Input
+                      type="text"
+                      value={sheet.magic.spellMultiplier}
+                      onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellMultiplier: e.target.value } }))}
+                    />
                   </div>
-                  <div className="rounded-2xl border p-3 text-sm">Magic penalty: {magicPenalty(magicPercent)}</div>
                 </div>
               </SectionCard>
 
@@ -2653,9 +2688,43 @@ export default function RolemasterCharacterSheetEngine() {
                     <label className="mb-1 block text-sm">Special Bonus</label>
                     <NumberInput value={sheet.exhaustion.specialBonus} onChange={(v) => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, specialBonus: v } }))} />
                   </div>
-                  <div className="rounded-2xl border p-3 text-sm">Exhaustion penalty: {exhaustionPenalty(exhaustionPercent)}</div>
                 </div>
               </SectionCard>
+            </div>
+
+            <div className="mt-3 grid gap-3 xl:grid-cols-3">
+              <div className="rounded-2xl border bg-white p-3 text-sm">
+                Concussion penalty: {healthPenalty(healthPercent) === -999 ? "Unconscious" : healthPenalty(healthPercent)}
+                <div className="mt-2 space-y-1 text-xs text-slate-500">
+                  <div>Thresholds (hits taken):</div>
+                  <div>&ge; {healthThreshold25}: -10</div>
+                  <div>&ge; {healthThreshold50}: -20</div>
+                  <div>&ge; {healthThreshold75}: -30</div>
+                  <div>&ge; {healthThreshold100}: Unconscious</div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border bg-white p-3 text-sm">
+                Magic penalty: {magicPenalty(magicPercent)}
+                <div className="mt-2 space-y-1 text-xs text-slate-500">
+                  <div>Thresholds (PP used):</div>
+                  <div>&ge; {magicThreshold25}: -10</div>
+                  <div>&ge; {magicThreshold50}: -20</div>
+                  <div>&ge; {magicThreshold75}: -30</div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border bg-white p-3 text-sm">
+                Exhaustion penalty: {exhaustionPenalty(exhaustionPercent)}
+                <div className="mt-2 space-y-1 text-xs text-slate-500">
+                  <div>Thresholds (EP used):</div>
+                  <div>&ge; {exhaustionThreshold25}: -5</div>
+                  <div>&ge; {exhaustionThreshold50}: -15</div>
+                  <div>&ge; {exhaustionThreshold75}: -30</div>
+                  <div>&ge; {exhaustionThreshold90}: -60</div>
+                  <div>&ge; {exhaustionThreshold100}: -100</div>
+                </div>
+              </div>
             </div>
 
             <SectionCard title="Injuries" action={<Button variant="outline" className="rounded-2xl" onClick={() => updateSheet((prev) => ({ ...prev, injuries: [...prev.injuries, { id: uid("inj"), text: "" }] }))}><Plus className="mr-2 h-4 w-4" />Add Injury</Button>}>
