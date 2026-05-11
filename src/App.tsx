@@ -12,36 +12,98 @@ import { Separator } from "@/components/ui/separator";
 import { Plus, Trash2, Save, Download, Upload, Star, ChevronDown, ChevronUp } from "lucide-react";
 import { RACES_DATA } from "@/data/races";
 import { PROFESSIONS_DATA } from "@/data/professions";
-
-const STAT_NAMES = [
-  "Agility",
-  "Constitution",
-  "Memory",
-  "Reasoning",
-  "Self Discipline",
-  "Empathy",
-  "Intuition",
-  "Presence",
-  "Quickness",
-  "Strength",
-] as const;
-
-type StatName = (typeof STAT_NAMES)[number];
-
-type Realm = "Mentalism" | "Essence" | "Channeling" | "Arms";
-
-type MagicalRealm = Exclude<Realm, "Arms">;
-
-type ProgressionType = "standard" | "bodyDevelopment" | "powerPointDevelopment" | "combined" | "limited" | "special";
-
-type RankProgression = [number, number, number, number, number];
-
-type StatBlock = {
-  temp: number;
-  potential: number;
-  racialBonus: number;
-  specialBonus: number;
-};
+import { PROFESSION_CATEGORY_COSTS } from "@/data/professionCategoryCosts";
+import { TRAINING_PACKAGES, type TrainingPackage } from "@/data/trainingPackages";
+import {
+  categoryOptionsForConstraint,
+  effectiveAllocationMode,
+  getChoiceConstraint,
+  isChoiceSkillGrant,
+  isWeaponCategory,
+  parseChoiceMaxTargets,
+  parsePackageStatGainSlots,
+  skillOptionsForConstraint,
+  type ChoiceConstraint,
+} from "@/lib/trainingPackageRules";
+import { validateChoiceSkillGrants } from "@/lib/trainingPackageValidation";
+import { resolveStatLevelRoll } from "@/lib/statLevelRoll";
+import { applyTrainingPackageToSheet, removeTrainingPackageAtFromSheet } from "@/lib/trainingPackageMutations";
+import { SPELL_LISTS, baseSpellListsByProfession } from "@/data/spellLists";
+import { migrateSheet } from "@/lib/sheetMigration";
+import { applyLevelUpToSheet } from "@/lib/levelUpMutations";
+import {
+  armorCastingPenalty,
+  equipmentPenaltyByRealm,
+  freeHandsModifier,
+  helmetModifier,
+  levelPreparationModifier,
+  rollOpenEndedD100,
+  spellListTypeCastingModifier,
+  voiceModifier,
+  type FreeHandsMode,
+  type HelmetMode,
+  type VoiceMode,
+} from "@/lib/spellCasting";
+import {
+  statBasicBonus,
+  rankValue,
+  clampNumber,
+  pctUsed,
+  healthPenalty,
+  magicPenalty,
+  exhaustionPenalty,
+  thresholdAt,
+  parseDevelopmentCost,
+  formatDevelopmentCostPath,
+  formatDevelopmentCostSchedule,
+  parseExhaustionBonusFromRaceNotes,
+  rankCostOptions,
+  isZeroProgression,
+  isBandedDevelopmentCost,
+  totalCost,
+  currencyValue,
+  isValidDie,
+  canEditCategoryNewRanks,
+  formatProgressionType,
+  formatProgression,
+  STAT_ABBR,
+  abbrStats,
+} from "@/lib/sheetMath";
+import {
+  CATEGORY_ORDER,
+  CATEGORY_CONFIG,
+  DEFAULT_CATEGORY_PROGRESSION,
+  DEFAULT_SKILL_PROGRESSIONS,
+  ZERO_PROGRESSION,
+  normalizeText,
+  groupMatch,
+  buildCategoryBonuses,
+} from "@/lib/categoryData";
+import { uid, makeDefaultStats, makeDefaultCategories, makeDefaultSheet } from "@/lib/sheetFactory";
+import {
+  STAT_NAMES,
+  REALM_STAT_MAP,
+  firstMagicalRealm,
+  type StatName,
+  type Realm,
+  type MagicalRealm,
+  type ProgressionType,
+  type RankProgression,
+  type StatBlock,
+  type SkillCategory,
+  type Skill,
+  type ArmorState,
+  type EquipmentItem,
+  type InjuryItem,
+  type PackageRankChange,
+  type PackageStatChange,
+  type TrainingPackageApplication,
+  type PackageStatGainSlot,
+  type PackageChoiceAllocation,
+  type CharacterSheet,
+  type SpellListCatalogEntry,
+  type SpellListType,
+} from "@/lib/types";
 
 type RaceData = {
   name: string;
@@ -72,391 +134,14 @@ type ProfessionData = {
   rules: ProfessionRule[];
 };
 
-type SkillCategory = {
-  id: string;
-  name: string;
-  applicableStats: StatName[];
-  developmentCost: string;
-  ranks: number;
-  newRanks: number;
-  progressionType: ProgressionType;
-  customProgression?: RankProgression;
-  professionBonus: number;
-  specialBonus: number;
-};
-
-type Skill = {
-  id: string;
-  name: string;
-  categoryId: string;
-  ranks: number;
-  newRanks: number;
-  itemBonus: number;
-  specialBonus: number;
-  favorite: boolean;
-  fumble: string;
-  rangeModifications: string;
-};
-
-type ArmorState = {
-  armorType: number;
-  weightPenalty: number;
-  baseMovementRate: number;
-  movingManeuverPenalty: number;
-  missilePenalty: number;
-  armorQuicknessPenalty: number;
-  shieldBonus: number;
-  magicBonus: number;
-  specialBonus: number;
-};
+type ProfessionCategoryCostMap = Record<string, Record<string, string>>;
 
 type ResistanceName = "Channeling" | "Essence" | "Mentalism" | "Poison" | "Disease" | "Fear";
 
-type EquipmentItem = {
-  id: string;
-  name: string;
-  description: string;
-  location: string;
-  weight: number;
-};
-
-type InjuryItem = {
-  id: string;
-  text: string;
-};
-
-type CharacterSheet = {
-  details: {
-    characterName: string;
-    level: number;
-    race: string;
-    culture: string;
-    profession: string;
-    trainingPackages: string[];
-    realmOfPower: string[];
-    talents: string[];
-    flaws: string[];
-    talentPoints: number;
-    drivePoints: number;
-    heroicPath: number;
-  };
-  stats: Record<StatName, StatBlock>;
-  traits: {
-    appearance: number;
-    demeanor: string;
-    apparentAge: string;
-    actualAge: string;
-    gender: string;
-    skin: string;
-    height: string;
-    weight: string;
-    hair: string;
-    eyes: string;
-    personality: string;
-    motivation: string;
-    alignment: string;
-  };
-  background: {
-    nationality: string;
-    hometown: string;
-    deity: string;
-    patronLord: string;
-    parents: string;
-    spouse: string;
-    children: string;
-    other: string;
-  };
-  armor: ArmorState;
-  skillCategories: SkillCategory[];
-  skills: Skill[];
-  equipment: EquipmentItem[];
-  wealth: {
-    mithril: number;
-    platinum: number;
-    gold: number;
-    silver: number;
-    bronze: number;
-    copper: number;
-    tin: number;
-    iron: number;
-    gems: string;
-    jewelry: string;
-  };
-  health: {
-    currentHits: number;
-    stunned: string;
-    stunNoParry: string;
-    downAndOut: string;
-    bleedPerRound: string;
-  };
-  magic: {
-    currentPP: number;
-    spellAdder: string;
-    spellMultiplier: string;
-  };
-  exhaustion: {
-    currentEP: number;
-    specialBonus: number;
-  };
-  injuries: InjuryItem[];
-};
-
 const RACES: RaceData[] = RACES_DATA as unknown as RaceData[];
 
-function normalizeText(input: string) {
-  return input.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function groupMatch(categoryName: string, target: string) {
-  const cat = normalizeText(categoryName);
-  const rule = normalizeText(target);
-
-  if (cat === rule) return true;
-  if (rule.includes("all armor")) return cat.startsWith("armor ");
-  if (rule.includes("all awareness")) return cat.startsWith("awareness ");
-  if (rule.includes("all athletic")) return cat.startsWith("athletic ");
-  if (rule.includes("all weapon")) return cat.startsWith("weapon ");
-  if (rule.includes("all subterfuge")) return cat.startsWith("subterfuge ");
-  if (rule.includes("all lore")) return cat.startsWith("lore ");
-  if (rule.includes("all spell")) return cat.startsWith("spells ");
-  if (rule.includes("all outdoor")) return cat.startsWith("outdoor ");
-  if (rule.includes("all martial arts")) return cat.startsWith("martial arts ");
-  if (rule.includes("all science")) return cat.startsWith("science analytic ");
-  if (rule.includes("all technical trade")) return cat.startsWith("technical trade ");
-  if (rule.includes("athletic gymnastic")) return cat === normalizeText("Athletic • Gymnastics");
-  if (rule.includes("outdoor environmental")) return cat === normalizeText("Outdoor • Environmental");
-  if (rule.includes("subterfuge stealth")) return cat === normalizeText("Subterfuge • Stealth");
-  return cat === rule;
-}
-
-function buildCategoryBonuses(rules: ProfessionRule[]) {
-  const bonuses: Record<string, number> = {};
-  CATEGORY_ORDER.forEach((categoryName) => {
-    bonuses[categoryName] = rules.reduce((sum, rule) => {
-      return groupMatch(categoryName, rule.target) ? sum + rule.bonus : sum;
-    }, 0);
-  });
-  return bonuses;
-}
-
 const PROFESSIONS: ProfessionData[] = PROFESSIONS_DATA as unknown as ProfessionData[];
-
-const CATEGORY_ORDER = [
-  "Armor • Heavy", "Armor • Light", "Armor • Medium", "Artistic • Active", "Artistic • Passive", "Athletic • Brawn", "Athletic • Endurance", "Athletic • Gymnastics", "Awareness • Perceptions", "Awareness • Searching", "Awareness • Senses", "Body Development", "Combat Maneuvers", "Communications", "Crafts", "Directed Spells", "Influence", "Lore • General", "Lore • Magical", "Lore • Obscure", "Lore • Technical", "Martial Arts • Striking", "Martial Arts • Sweeps", "Outdoor • Animal", "Outdoor • Environmental", "Power Awareness", "Power Manipulation", "Power Point Development", "Science/Analytic • Basic", "Science/Analytic • Specialized", "Self Control", "Special Attacks", "Special Defenses", "Spells • Own Realm Closed Lists", "Spells • Own Realm Open Lists", "Spells • Own Realm Own Base Lists", "Spells • Own Realm Other Base Lists", "Spells • Other Realm Closed Lists", "Spells • Other Realm Open Lists", "Spells • Other Realm Other Base Lists", "Subterfuge • Attack", "Subterfuge • Mechanics", "Subterfuge • Stealth", "Technical/Trade • General", "Technical/Trade • Professional", "Technical/Trade • Vocational", "Urban", "Weapon • 1-H Concussion", "Weapon • 1-H Edged", "Weapon • 2-Handed", "Weapon • Missile", "Weapon • Missile Artillery", "Weapon • Pole Arms", "Weapon • Thrown"
-] as const;
-
-const CATEGORY_CONFIG: Record<string, { applicableStats: StatName[]; developmentCost: string; progressionType: ProgressionType; newRanks: number }> = {
-  "Armor • Heavy": { applicableStats: ["Strength", "Agility", "Strength"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Armor • Light": { applicableStats: ["Agility", "Strength", "Agility"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Armor • Medium": { applicableStats: ["Strength", "Agility", "Strength"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Artistic • Active": { applicableStats: ["Presence", "Empathy", "Agility"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Artistic • Passive": { applicableStats: ["Empathy", "Intuition", "Presence"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Athletic • Brawn": { applicableStats: ["Strength", "Constitution", "Agility"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Athletic • Endurance": { applicableStats: ["Constitution", "Agility", "Strength"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Athletic • Gymnastics": { applicableStats: ["Agility", "Quickness", "Agility"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Awareness • Perceptions": { applicableStats: ["Intuition", "Self Discipline", "Intuition"], developmentCost: "", progressionType: "limited", newRanks: 1 },
-  "Awareness • Searching": { applicableStats: ["Intuition", "Reasoning", "Self Discipline"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Awareness • Senses": { applicableStats: ["Intuition", "Self Discipline", "Intuition"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Body Development": { applicableStats: ["Constitution", "Self Discipline", "Constitution"], developmentCost: "", progressionType: "bodyDevelopment", newRanks: 1 },
-  "Combat Maneuvers": { applicableStats: ["Agility", "Quickness", "Self Discipline"], developmentCost: "", progressionType: "combined", newRanks: 1 },
-  "Communications": { applicableStats: ["Reasoning", "Memory", "Empathy"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Crafts": { applicableStats: ["Agility", "Memory", "Self Discipline"], developmentCost: "", progressionType: "combined", newRanks: 1 },
-  "Directed Spells": { applicableStats: ["Agility", "Self Discipline", "Agility"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Influence": { applicableStats: ["Presence", "Empathy", "Intuition"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Lore • General": { applicableStats: ["Memory", "Reasoning", "Memory"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Lore • Magical": { applicableStats: ["Memory", "Reasoning", "Memory"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Lore • Obscure": { applicableStats: ["Memory", "Reasoning", "Memory"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Lore • Technical": { applicableStats: ["Memory", "Reasoning", "Memory"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Martial Arts • Striking": { applicableStats: ["Strength", "Agility", "Strength"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Martial Arts • Sweeps": { applicableStats: ["Agility", "Strength", "Agility"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Outdoor • Animal": { applicableStats: ["Empathy", "Agility", "Empathy"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Outdoor • Environmental": { applicableStats: ["Self Discipline", "Intuition", "Memory"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Power Awareness": { applicableStats: ["Empathy", "Intuition", "Presence"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Power Manipulation": { applicableStats: ["Empathy", "Intuition", "Presence"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Power Point Development": { applicableStats: [], developmentCost: "", progressionType: "powerPointDevelopment", newRanks: 1 },
-  "Science/Analytic • Basic": { applicableStats: ["Reasoning", "Memory", "Reasoning"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Science/Analytic • Specialized": { applicableStats: ["Reasoning", "Memory", "Reasoning"], developmentCost: "", progressionType: "combined", newRanks: 1 },
-  "Self Control": { applicableStats: ["Self Discipline", "Presence", "Self Discipline"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Special Attacks": { applicableStats: ["Strength", "Agility", "Strength"], developmentCost: "", progressionType: "combined", newRanks: 1 },
-  "Special Defenses": { applicableStats: [], developmentCost: "", progressionType: "special", newRanks: 1 },
-  "Spells • Own Realm Closed Lists": { applicableStats: [], developmentCost: "", progressionType: "limited", newRanks: 1 },
-  "Spells • Own Realm Open Lists": { applicableStats: [], developmentCost: "", progressionType: "limited", newRanks: 1 },
-  "Spells • Own Realm Own Base Lists": { applicableStats: [], developmentCost: "", progressionType: "limited", newRanks: 1 },
-  "Spells • Own Realm Other Base Lists": { applicableStats: [], developmentCost: "", progressionType: "limited", newRanks: 1 },
-  "Spells • Other Realm Closed Lists": { applicableStats: [], developmentCost: "", progressionType: "limited", newRanks: 1 },
-  "Spells • Other Realm Open Lists": { applicableStats: [], developmentCost: "", progressionType: "limited", newRanks: 1 },
-  "Spells • Other Realm Other Base Lists": { applicableStats: [], developmentCost: "", progressionType: "limited", newRanks: 1 },
-  "Subterfuge • Attack": { applicableStats: ["Agility", "Self Discipline", "Intuition"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Subterfuge • Mechanics": { applicableStats: ["Intuition", "Agility", "Reasoning"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Subterfuge • Stealth": { applicableStats: ["Agility", "Self Discipline", "Intuition"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Technical/Trade • General": { applicableStats: ["Reasoning", "Memory", "Self Discipline"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Technical/Trade • Professional": { applicableStats: ["Reasoning", "Memory", "Intuition"], developmentCost: "", progressionType: "combined", newRanks: 1 },
-  "Technical/Trade • Vocational": { applicableStats: ["Memory", "Intuition", "Reasoning"], developmentCost: "", progressionType: "combined", newRanks: 1 },
-  Urban: { applicableStats: ["Intuition", "Presence", "Reasoning"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Weapon • 1-H Concussion": { applicableStats: ["Strength", "Agility", "Strength"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Weapon • 1-H Edged": { applicableStats: ["Strength", "Agility", "Strength"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Weapon • 2-Handed": { applicableStats: ["Strength", "Agility", "Strength"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Weapon • Missile": { applicableStats: ["Agility", "Strength", "Agility"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Weapon • Missile Artillery": { applicableStats: ["Intuition", "Agility", "Reasoning"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Weapon • Pole Arms": { applicableStats: ["Strength", "Agility", "Strength"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-  "Weapon • Thrown": { applicableStats: ["Agility", "Strength", "Agility"], developmentCost: "", progressionType: "standard", newRanks: 1 },
-};
-
-const DEFAULT_CATEGORY_PROGRESSION: RankProgression = [-15, 2, 1, 0.5, 0];
-const DEFAULT_SKILL_PROGRESSIONS: Record<ProgressionType, RankProgression> = {
-  standard: [-15, 3, 2, 1, 0.5],
-  combined: [-15, 5, 3, 1.5, 0.5],
-  limited: [0, 1, 1, 0.5, 0],
-  bodyDevelopment: [0, 0, 0, 0, 0],
-  powerPointDevelopment: [0, 0, 0, 0, 0],
-  special: [0, 6, 5, 4, 3],
-};
-const ZERO_PROGRESSION: RankProgression = [0, 0, 0, 0, 0];
-
-const REALM_STAT_MAP: Record<MagicalRealm, StatName> = {
-  Channeling: "Intuition",
-  Essence: "Empathy",
-  Mentalism: "Presence",
-};
-
-function firstMagicalRealm(realms: Realm[]): MagicalRealm {
-  const found = realms.find((realm): realm is MagicalRealm => realm !== "Arms");
-  return found ?? "Channeling";
-}
-
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function statBasicBonus(val: number) {
-  if (val <= 1) return -10;
-  if (val <= 3) return -9;
-  if (val <= 5) return -8;
-  if (val <= 7) return -7;
-  if (val <= 9) return -6;
-  if (val === 10) return -5;
-  if (val <= 15) return -4;
-  if (val <= 20) return -3;
-  if (val <= 25) return -2;
-  if (val <= 30) return -1;
-  if (val <= 69) return 0;
-  if (val <= 74) return 1;
-  if (val <= 79) return 2;
-  if (val <= 84) return 3;
-  if (val <= 89) return 4;
-  if (val <= 91) return 5;
-  if (val <= 93) return 6;
-  if (val <= 95) return 7;
-  if (val <= 97) return 8;
-  if (val <= 99) return 9;
-  if (val === 100) return 10;
-  if (val === 101) return 12;
-  return 14;
-}
-
-function rankValue(ranks: number, progression: RankProgression) {
-  const effectiveRanks = Math.max(0, ranks);
-  if (effectiveRanks === 0) return progression[0];
-
-  let total = 0;
-  let remaining = effectiveRanks;
-
-  const brackets = [10, 10, 10, Infinity];
-  const perRank = [progression[1], progression[2], progression[3], progression[4]];
-
-  for (let i = 0; i < brackets.length && remaining > 0; i += 1) {
-    const used = Math.min(remaining, brackets[i]);
-    total += used * perRank[i];
-    remaining -= used;
-  }
-
-  return Math.floor(total * 2) / 2;
-}
-
-function canEditCategoryNewRanks(progressionType: ProgressionType) {
-  return progressionType === "standard";
-}
-
-function formatProgressionType(progressionType: ProgressionType) {
-  switch (progressionType) {
-    case "standard":
-      return "Standard";
-    case "combined":
-      return "Combined";
-    case "limited":
-      return "Limited";
-    case "special":
-      return "Special";
-    case "bodyDevelopment":
-      return "Body Dev";
-    case "powerPointDevelopment":
-      return "PP Dev";
-    default:
-      return "Unknown";
-  }
-}
-
-function clampNumber(v: number, min = 0) {
-  if (Number.isNaN(v)) return min;
-  return Math.max(min, v);
-}
-
-function formatProgression(p: RankProgression) {
-  return `${p[0]} • ${p[1]} • ${p[2]} • ${p[3]} • ${p[4]}`;
-}
-
-const STAT_ABBR: Record<string, string> = {
-  Agility: "Ag",
-  Constitution: "Co",
-  Memory: "Me",
-  Reasoning: "Re",
-  "Self Discipline": "SD",
-  Empathy: "Em",
-  Intuition: "In",
-  Presence: "Pr",
-  Quickness: "Qu",
-  Strength: "St",
-};
-function abbrStats(stats: string[]) {
-  return stats.map((s) => STAT_ABBR[s] ?? s.slice(0, 2)).join("/") || "—";
-}
-
-function isWeaponCategory(catName: string) {
-  return catName.startsWith("Weapon •") || ["Martial Arts • Striking", "Martial Arts • Sweeps", "Special Attacks"].includes(catName);
-}
-
-function pctUsed(current: number, total: number) {
-  if (total <= 0) return 0;
-  return Math.max(0, Math.min(100, (current / total) * 100));
-}
-
-function healthPenalty(percent: number) {
-  if (percent < 25) return 0;
-  if (percent < 50) return -10;
-  if (percent < 75) return -20;
-  if (percent < 100) return -30;
-  return -999;
-}
-
-function magicPenalty(percent: number) {
-  if (percent < 25) return 0;
-  if (percent < 50) return -10;
-  if (percent < 75) return -20;
-  return -30;
-}
-
-function exhaustionPenalty(percent: number) {
-  if (percent < 25) return 0;
-  if (percent < 50) return -5;
-  if (percent < 75) return -15;
-  if (percent < 90) return -30;
-  if (percent < 100) return -60;
-  return -100;
-}
-
-function thresholdAt(total: number, percent: number) {
-  return Math.ceil((Math.max(0, total) * percent) / 100);
-}
+const PROFESSION_COSTS: ProfessionCategoryCostMap = PROFESSION_CATEGORY_COSTS as ProfessionCategoryCostMap;
 
 type DicePair = { die1: number; die2: number };
 
@@ -483,261 +168,15 @@ function makeEmptyBaseRolls(): Record<StatName, DicePair> {
   }, {} as Record<StatName, DicePair>);
 }
 
-function isValidDie(value: number) {
-  return Number.isFinite(value) && value >= 1 && value <= 10;
+function parseSignedNumber(value: string): number {
+  const direct = Number(value);
+  if (Number.isFinite(direct)) return direct;
+  const match = String(value ?? "").match(/[+-]?\d+/);
+  return match ? Number(match[0]) : 0;
 }
 
-function parseDevelopmentCost(cost: string) {
-  if (!cost.trim()) return [] as number[];
-  return cost
-    .split(/[^0-9]+/)
-    .map((part) => Number(part))
-    .filter((num) => Number.isFinite(num) && num > 0);
-}
-
-function formatDevelopmentCostPath(cost: string) {
-  const parsed = parseDevelopmentCost(cost);
-  return parsed.length > 0 ? parsed.join("/") : "—";
-}
-
-function parseExhaustionBonusFromRaceNotes(notes?: string[]) {
-  if (!notes || notes.length === 0) return 0;
-  return notes.reduce((sum, note) => {
-    const match = note.match(/([+-]?\d+)\s*exhaustion\s*points?/i);
-    if (!match) return sum;
-    return sum + (Number(match[1]) || 0);
-  }, 0);
-}
-
-function rankCostOptions(developmentCost: string, newRanks: number) {
-  const costs = parseDevelopmentCost(developmentCost);
-  const allowedUpgrades = Math.max(0, Math.min(3, costs.length));
-  const ranksPerUpgrade = Math.max(1, Math.min(3, Math.floor(newRanks)));
-  const options: Array<{ upgrades: number; rankGain: number; cost: number }> = [];
-
-  let runningCost = 0;
-  for (let upgrades = 1; upgrades <= allowedUpgrades; upgrades += 1) {
-    runningCost += costs[upgrades - 1];
-    options.push({
-      upgrades,
-      rankGain: upgrades * ranksPerUpgrade,
-      cost: runningCost,
-    });
-  }
-
-  return options;
-}
-
-function isZeroProgression(progression: RankProgression) {
-  return progression.every((value) => value === 0);
-}
-
-function totalCost(costs: number[]) {
-  return costs.reduce((sum, c) => sum + c, 0);
-}
-
-function resolveStatLevelRoll(temp: number, potential: number, die1: number, die2: number) {
-  const sum = die1 + die2;
-  const isDouble = die1 === die2;
-  const gap = potential - temp;
-  let nextTemp = temp;
-  let nextPotential = potential;
-  let explanation = "";
-
-  if (isDouble && die1 <= 5) {
-    nextTemp = temp - sum;
-    explanation = `Double ${die1}: temp -${sum}`;
-  } else if (isDouble && die1 >= 6) {
-    if (temp >= potential) {
-      nextPotential = potential + 1;
-      explanation = `Double ${die1} at cap: potential +1`;
-    } else {
-      nextTemp = temp + sum;
-      explanation = `Double ${die1}: temp +${sum}`;
-    }
-  } else if (gap > 20) {
-    nextTemp = temp + sum;
-    explanation = `Gap ${gap}: temp +${sum} (both dice)`;
-  } else if (gap >= 11) {
-    const added = Math.max(die1, die2);
-    nextTemp = temp + added;
-    explanation = `Gap ${gap}: temp +${added} (higher die)`;
-  } else {
-    const added = Math.min(die1, die2);
-    nextTemp = temp + added;
-    explanation = `Gap ${gap}: temp +${added} (lower die)`;
-  }
-
-  if (nextTemp > nextPotential) nextTemp = nextPotential;
-
-  return {
-    temp: nextTemp,
-    potential: nextPotential,
-    explanation,
-  };
-}
-
-function currencyValue(wealth: CharacterSheet["wealth"]) {
-  return (
-    wealth.iron +
-    wealth.tin * 10 +
-    wealth.copper * 100 +
-    wealth.bronze * 1000 +
-    wealth.silver * 10000 +
-    wealth.gold * 100000 +
-    wealth.platinum * 1000000 +
-    wealth.mithril * 10000000
-  );
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function migrateSheet(parsed: any): CharacterSheet {
-  const s = parsed as CharacterSheet;
-  if (!Array.isArray(s.details.talents)) {
-    (s.details as any).talents = s.details.talents ? [(s.details as any).talents as string] : [];
-  }
-  if (!Array.isArray(s.details.flaws)) {
-    (s.details as any).flaws = s.details.flaws ? [(s.details as any).flaws as string] : [];
-  }
-  if (typeof s.details.heroicPath !== "number") {
-    (s.details as any).heroicPath = Number(s.details.heroicPath) || 0;
-  }
-  if (!Array.isArray(s.skills)) {
-    (s as any).skills = [];
-  }
-  if (typeof s.magic?.spellAdder !== "string") {
-    (s.magic as any).spellAdder = s.magic?.spellAdder == null ? "" : String(s.magic.spellAdder);
-  }
-  if (typeof s.magic?.spellMultiplier !== "string") {
-    (s.magic as any).spellMultiplier = s.magic?.spellMultiplier == null ? "" : String(s.magic.spellMultiplier);
-  }
-  s.skills = s.skills.map((skill) => ({
-    ...skill,
-    newRanks: typeof (skill as any).newRanks === "number" ? (skill as any).newRanks : 1,
-  }));
-  return s;
-}
-
-function makeDefaultStats(): Record<StatName, StatBlock> {
-  return STAT_NAMES.reduce((acc, name) => {
-    acc[name] = { temp: 50, potential: 100, racialBonus: 0, specialBonus: 0 };
-    return acc;
-  }, {} as Record<StatName, StatBlock>);
-}
-
-function makeDefaultCategories(): SkillCategory[] {
-  return CATEGORY_ORDER.map((name) => ({
-    id: uid("cat"),
-    name,
-    applicableStats: CATEGORY_CONFIG[name]?.applicableStats ?? [],
-    developmentCost: CATEGORY_CONFIG[name]?.developmentCost ?? "",
-    ranks: 0,
-    newRanks: CATEGORY_CONFIG[name]?.newRanks ?? 1,
-    progressionType: CATEGORY_CONFIG[name]?.progressionType ?? "standard",
-    professionBonus: 0,
-    specialBonus: name === "Body Development" ? 10 : 0,
-  }));
-}
-
-function makeDefaultSheet(): CharacterSheet {
-  return {
-    details: {
-      characterName: "",
-      level: 1,
-      race: "Common Men",
-      culture: "",
-      profession: "Fighter",
-      trainingPackages: [],
-      realmOfPower: ["Arms"],
-      talents: [],
-      flaws: [],
-      talentPoints: 0,
-      drivePoints: 0,
-      heroicPath: 0,
-    },
-    stats: makeDefaultStats(),
-    traits: {
-      appearance: 50,
-      demeanor: "",
-      apparentAge: "",
-      actualAge: "",
-      gender: "",
-      skin: "",
-      height: "",
-      weight: "",
-      hair: "",
-      eyes: "",
-      personality: "",
-      motivation: "",
-      alignment: "",
-    },
-    background: {
-      nationality: "",
-      hometown: "",
-      deity: "",
-      patronLord: "",
-      parents: "",
-      spouse: "",
-      children: "",
-      other: "",
-    },
-    armor: {
-      armorType: 1,
-      weightPenalty: 0,
-      baseMovementRate: 100,
-      movingManeuverPenalty: 0,
-      missilePenalty: 0,
-      armorQuicknessPenalty: 0,
-      shieldBonus: 0,
-      magicBonus: 0,
-      specialBonus: 0,
-    },
-    skillCategories: makeDefaultCategories(),
-    skills: [
-      {
-        id: uid("skill"),
-        name: "Perception",
-        categoryId: "",
-        ranks: 0,
-        newRanks: 1,
-        itemBonus: 0,
-        specialBonus: 0,
-        favorite: true,
-        fumble: "",
-        rangeModifications: "",
-      },
-    ],
-    equipment: [],
-    wealth: {
-      mithril: 0,
-      platinum: 0,
-      gold: 0,
-      silver: 0,
-      bronze: 0,
-      copper: 0,
-      tin: 0,
-      iron: 0,
-      gems: "",
-      jewelry: "",
-    },
-    health: {
-      currentHits: 0,
-      stunned: "",
-      stunNoParry: "",
-      downAndOut: "",
-      bleedPerRound: "",
-    },
-    magic: {
-      currentPP: 0,
-      spellAdder: "",
-      spellMultiplier: "",
-    },
-    exhaustion: {
-      currentEP: 0,
-      specialBonus: 0,
-    },
-    injuries: [],
-  };
+function signed(value: number): string {
+  return value >= 0 ? `+${value}` : String(value);
 }
 
 function NumberInput({ value, onChange, className = "", min }: { value: number; onChange: (v: number) => void; className?: string; min?: number }) {
@@ -828,6 +267,7 @@ const TAB_OPTIONS = [
   { value: "combat", label: "Combat" },
   { value: "categories", label: "Skill Categories" },
   { value: "skills", label: "Skills" },
+  { value: "spells", label: "Spells" },
   { value: "gear", label: "Gear" },
   { value: "status", label: "Status" },
   { value: "backup", label: "Backup" },
@@ -844,6 +284,7 @@ export default function RolemasterCharacterSheetEngine() {
   const [expandedMobileSkillId, setExpandedMobileSkillId] = useState<string | null>(null);
   const [expandedMobileStat, setExpandedMobileStat] = useState<StatName | null>(null);
   const [expandedMobileCategoryId, setExpandedMobileCategoryId] = useState<string | null>(null);
+    const [expandedSpellListIds, setExpandedSpellListIds] = useState<Set<string>>(() => new Set());
   const [baseStatRolls, setBaseStatRolls] = useState<Record<StatName, DicePair>>(() => makeEmptyBaseRolls());
   const [dpSpendEntries, setDpSpendEntries] = useState<DpSpendEntry[]>([]);
   const [extraStatRolls, setExtraStatRolls] = useState<ExtraStatRoll[]>([]);
@@ -851,7 +292,25 @@ export default function RolemasterCharacterSheetEngine() {
   const [newLevelUpSkillCategoryId, setNewLevelUpSkillCategoryId] = useState("");
   const [trainingPackageSpendName, setTrainingPackageSpendName] = useState("");
   const [trainingPackageSpendCost, setTrainingPackageSpendCost] = useState(0);
-  const [trainingPackageInput, setTrainingPackageInput] = useState("");
+  const [selectedPackageName, setSelectedPackageName] = useState("");
+  const [pendingPackageSkillChoices, setPendingPackageSkillChoices] = useState<Record<number, PackageChoiceAllocation[]>>({});
+  const [pendingPackageSpecials, setPendingPackageSpecials] = useState<Record<number, boolean>>({});
+  const [pendingPackageStatRolls, setPendingPackageStatRolls] = useState<Array<{ slotId: string; stat: StatName; die1: number; die2: number; allowsChoice: boolean; choiceGroup?: "different" }>>([]);
+  const [selectedCastListId, setSelectedCastListId] = useState("");
+  const [selectedCastSpellId, setSelectedCastSpellId] = useState("");
+  const [isCastAssistantOpen, setIsCastAssistantOpen] = useState(false);
+  const [castPrepRounds, setCastPrepRounds] = useState(0);
+  const [castSnapAction, setCastSnapAction] = useState(false);
+  const [castFreeHands, setCastFreeHands] = useState<FreeHandsMode>("one");
+  const [castVoice, setCastVoice] = useState<VoiceMode>("whisper");
+  const [castHelmet, setCastHelmet] = useState<HelmetMode>("none");
+  const [castOrganicLivingWeight, setCastOrganicLivingWeight] = useState(0);
+  const [castOrganicNonLivingWeight, setCastOrganicNonLivingWeight] = useState(0);
+  const [castInorganicWeight, setCastInorganicWeight] = useState(0);
+  const [castManualModifier, setCastManualModifier] = useState(0);
+  const [castOpenEndedRoll, setCastOpenEndedRoll] = useState(0);
+  const [castRollBreakdown, setCastRollBreakdown] = useState("");
+  const [lastCastSummary, setLastCastSummary] = useState("");
   const [talentInput, setTalentInput] = useState("");
   const [flawInput, setFlawInput] = useState("");
   const [transitionKey, setTransitionKey] = useState(0);
@@ -860,6 +319,8 @@ export default function RolemasterCharacterSheetEngine() {
   const [loaded, setLoaded] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const mobileCharacterTabsRef = useRef<HTMLDivElement | null>(null);
+  const trainingPackageRef = useRef<HTMLDivElement | null>(null);
+  const castModalBackdropMouseDownRef = useRef(false);
 
   // Derive active sheet (fall back to first character)
   const activeCharacter = characters.find((c) => c.id === activeId) ?? characters[0];
@@ -908,6 +369,25 @@ export default function RolemasterCharacterSheetEngine() {
     setExtraStatRolls([]);
     setTrainingPackageSpendName("");
     setTrainingPackageSpendCost(0);
+    setSelectedPackageName("");
+    setPendingPackageSkillChoices({});
+    setPendingPackageSpecials({});
+    setPendingPackageStatRolls([]);
+    setIsCastAssistantOpen(false);
+    setSelectedCastListId("");
+    setSelectedCastSpellId("");
+    setCastPrepRounds(0);
+    setCastSnapAction(false);
+    setCastFreeHands("one");
+    setCastVoice("whisper");
+    setCastHelmet("none");
+    setCastOrganicLivingWeight(0);
+    setCastOrganicNonLivingWeight(0);
+    setCastInorganicWeight(0);
+    setCastManualModifier(0);
+    setCastOpenEndedRoll(0);
+    setCastRollBreakdown("");
+    setLastCastSummary("");
   }, [activeCharacter.id]);
 
   useEffect(() => {
@@ -939,6 +419,18 @@ export default function RolemasterCharacterSheetEngine() {
     localStorage.setItem("rolemaster-party", JSON.stringify(characters));
   }, [characters, loaded]);
 
+  useEffect(() => {
+    if (!isCastAssistantOpen) return;
+    const originalOverflow = document.body.style.overflow;
+    const originalTouchAction = document.body.style.touchAction;
+    document.body.style.overflow = "hidden";
+    document.body.style.touchAction = "none";
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      document.body.style.touchAction = originalTouchAction;
+    };
+  }, [isCastAssistantOpen]);
+
   const selectedRace = useMemo(
     () => RACES.find((r) => r.name === sheet.details.race) ?? RACES[0],
     [sheet.details.race]
@@ -946,6 +438,11 @@ export default function RolemasterCharacterSheetEngine() {
 
   const selectedProfession = useMemo(
     () => PROFESSIONS.find((p) => p.name === sheet.details.profession) ?? PROFESSIONS[0],
+    [sheet.details.profession]
+  );
+
+  const selectedProfessionCosts = useMemo(
+    () => PROFESSION_COSTS[sheet.details.profession] ?? {},
     [sheet.details.profession]
   );
 
@@ -963,6 +460,9 @@ export default function RolemasterCharacterSheetEngine() {
       const nextCategories = prev.skillCategories.map((cat) => ({
         ...cat,
         professionBonus: professionCategoryBonuses[cat.name] ?? 0,
+        developmentCost: Object.prototype.hasOwnProperty.call(selectedProfessionCosts, cat.name)
+          ? selectedProfessionCosts[cat.name]
+          : cat.developmentCost,
       }));
       return {
         ...prev,
@@ -974,7 +474,7 @@ export default function RolemasterCharacterSheetEngine() {
         },
       };
     });
-  }, [selectedRace, selectedProfession, professionCategoryBonuses, activeId]);
+  }, [selectedRace, selectedProfession, selectedProfessionCosts, professionCategoryBonuses, activeId]);
 
   const statTotals = useMemo(() => {
     return STAT_NAMES.reduce((acc, name) => {
@@ -1096,6 +596,108 @@ export default function RolemasterCharacterSheetEngine() {
   }, [sheet.skills, categoryMap, selectedRace, sheet.details.realmOfPower]);
 
   const bodyDevelopmentCategoryTotal = categoryDerived.find((c) => c.name === "Body Development")?.total ?? 0;
+
+  const spellTabLists = useMemo(() => {
+    const profession = sheet.details.profession;
+    const spellCatIds = new Set(
+      sheet.skillCategories.filter((c) => c.name.startsWith("Spells •")).map((c) => c.id)
+    );
+    const ranksByName = new Map<string, number>();
+    for (const skill of sheet.skills) {
+      if (spellCatIds.has(skill.categoryId) && skill.name.trim()) {
+        ranksByName.set(skill.name.trim().toLowerCase(), skill.ranks);
+      }
+    }
+    const baseLists = baseSpellListsByProfession(profession);
+    const baseListIds = new Set(baseLists.map((l) => l.id));
+    const otherLists = SPELL_LISTS.filter(
+      (l) => !baseListIds.has(l.id) && ranksByName.has(l.name.toLowerCase())
+    );
+    return [...baseLists, ...otherLists].map((l) => ({
+      entry: l,
+      ranks: ranksByName.get(l.name.toLowerCase()) ?? 0,
+    }));
+  }, [sheet.skillCategories, sheet.skills, sheet.details.profession]);
+
+  const spellSkillBonusByListId = useMemo(() => {
+    const spellCategoryIds = new Set(
+      sheet.skillCategories.filter((category) => category.name.startsWith("Spells •")).map((category) => category.id),
+    );
+    const bonusByName = new Map<string, number>();
+    for (const skill of skillDerived) {
+      if (!spellCategoryIds.has(skill.categoryId)) continue;
+      const key = skill.name.trim().toLowerCase();
+      if (!key) continue;
+      bonusByName.set(key, skill.total);
+    }
+
+    return spellTabLists.reduce((acc, list) => {
+      acc[list.entry.id] = bonusByName.get(list.entry.name.trim().toLowerCase()) ?? 0;
+      return acc;
+    }, {} as Record<string, number>);
+  }, [sheet.skillCategories, skillDerived, spellTabLists]);
+
+  useEffect(() => {
+    if (spellTabLists.length === 0) {
+      setSelectedCastListId("");
+      return;
+    }
+    const exists = spellTabLists.some((list) => list.entry.id === selectedCastListId);
+    if (!exists) {
+      setSelectedCastListId("");
+    }
+  }, [spellTabLists, selectedCastListId]);
+
+  const selectedCastList = useMemo(
+    () => spellTabLists.find((list) => list.entry.id === selectedCastListId) ?? null,
+    [selectedCastListId, spellTabLists],
+  );
+
+  const availableCastSpells = useMemo(() => {
+    if (!selectedCastList) return [];
+    return selectedCastList.entry.spells.filter((spell) => spell.requiredRanks <= selectedCastList.ranks);
+  }, [selectedCastList]);
+
+  useEffect(() => {
+    if (availableCastSpells.length === 0) {
+      setSelectedCastSpellId("");
+      return;
+    }
+    const exists = availableCastSpells.some((spell) => spell.id === selectedCastSpellId);
+    if (!exists) {
+      setSelectedCastSpellId("");
+    }
+  }, [availableCastSpells, selectedCastSpellId]);
+
+  const selectedCastSpell = useMemo(
+    () => availableCastSpells.find((spell) => spell.id === selectedCastSpellId) ?? null,
+    [availableCastSpells, selectedCastSpellId],
+  );
+
+  const castRealm = selectedCastList?.entry.realm ?? firstMagicalRealm(sheet.details.realmOfPower as Realm[]);
+  const castSpellBonus = selectedCastList ? (spellSkillBonusByListId[selectedCastList.entry.id] ?? 0) : 0;
+  const castLevelDelta = selectedCastSpell ? sheet.details.level - selectedCastSpell.level : 0;
+  const castIsInstantaneous = Boolean(selectedCastSpell?.specialCodes.includes("*"));
+  const castPreparationModifier = selectedCastSpell
+    ? levelPreparationModifier(castLevelDelta, castIsInstantaneous, castPrepRounds)
+    : 0;
+  const castSnapActionModifier = selectedCastSpell && !castIsInstantaneous && castSnapAction ? -20 : 0;
+  const castListTypeModifier = selectedCastList
+    ? spellListTypeCastingModifier(selectedCastList.entry.type, selectedCastList.entry.realm, sheet.details.realmOfPower)
+    : 0;
+  const castFreeHandsModifier = freeHandsModifier(castRealm, castFreeHands);
+  const castVoiceModifier = voiceModifier(castRealm, castVoice);
+  const castHelmetModifier = helmetModifier(castRealm, castHelmet);
+  const castEquipmentModifier = equipmentPenaltyByRealm(castRealm, {
+    organicLiving: castOrganicLivingWeight,
+    organicNonLiving: castOrganicNonLivingWeight,
+    inorganic: castInorganicWeight,
+  });
+  const castArmorModifier = armorCastingPenalty(castRealm, sheet.armor.armorType);
+  const castPpCost = selectedCastSpell
+    ? (selectedCastSpell.specialCodes.includes("•") ? 0 : selectedCastSpell.level)
+    : 0;
+
   const powerPointCategoryTotal = categoryDerived.find((c) => c.name === "Power Point Development")?.total ?? 0;
   const bodyDevelopmentSkill = skillDerived.find((s) => s.category?.name === "Body Development");
   const powerPointSkill = skillDerived.find((s) => s.category?.name === "Power Point Development");
@@ -1119,6 +721,37 @@ export default function RolemasterCharacterSheetEngine() {
   const healthPercent = pctUsed(sheet.health.currentHits, totalHits);
   const magicPercent = pctUsed(sheet.magic.currentPP, totalPP);
   const exhaustionPercent = pctUsed(sheet.exhaustion.currentEP, totalEP);
+
+  const castPowerPointUsedPenalty = magicPenalty(magicPercent);
+
+  const castTotalModifier =
+    castPreparationModifier +
+    castSnapActionModifier +
+    castPowerPointUsedPenalty +
+    castListTypeModifier +
+    castFreeHandsModifier +
+    castVoiceModifier +
+    castHelmetModifier +
+    castEquipmentModifier +
+    castArmorModifier +
+    castSpellBonus +
+    castManualModifier +
+    castOpenEndedRoll;
+
+  const castModifierRows = [
+    { label: "Level and Preparation", value: castPreparationModifier },
+    { label: "Snap Action", value: castSnapActionModifier },
+    { label: "Power Point Used Penalty", value: castPowerPointUsedPenalty },
+    { label: "Spell List Type", value: castListTypeModifier },
+    { label: "Free Hands", value: castFreeHandsModifier },
+    { label: "Voice", value: castVoiceModifier },
+    { label: "Helmet", value: castHelmetModifier },
+    { label: "Equipment", value: castEquipmentModifier },
+    { label: "Armor Status", value: castArmorModifier },
+    { label: "Spell Bonus", value: castSpellBonus },
+    { label: "Manual Modifier", value: castManualModifier },
+    { label: "Open Ended 1d100", value: castOpenEndedRoll },
+  ];
 
   const healthThreshold25 = thresholdAt(totalHits, 25);
   const healthThreshold50 = thresholdAt(totalHits, 50);
@@ -1229,12 +862,32 @@ export default function RolemasterCharacterSheetEngine() {
         name: cat.name,
         ranks: cat.ranks,
         ranksPerUpgrade: cat.newRanks,
+        currentTotal: cat.total,
         progression: cat.progression,
-        options: rankCostOptions(cat.developmentCost, cat.newRanks),
+        options: rankCostOptions(cat.developmentCost, cat.newRanks, cat.ranks),
         selectedUpgrades: selectedUpgradeCounts[`cat:${cat.id}`] ?? 0,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [categoryDerived, selectedUpgradeCounts]);
+
+  const projectedCategoryBonuses = useMemo(() => {
+    return categorySpendSuggestions.reduce((acc, category) => {
+      const selectedOption = category.options[category.selectedUpgrades - 1];
+      const rankGain = selectedOption?.rankGain ?? 0;
+      const projectedRanks = category.ranks + rankGain;
+      const current = categoryDerived.find((item) => item.id === category.id);
+      const projectedRank = rankValue(projectedRanks, category.progression);
+      const projectedTotal = current
+        ? projectedRank + current.stat + current.professionBonus + current.specialBonus
+        : projectedRank;
+
+      acc[category.id] = {
+        projectedRanks,
+        projectedTotal,
+      };
+      return acc;
+    }, {} as Record<string, { projectedRanks: number; projectedTotal: number }>);
+  }, [categoryDerived, categorySpendSuggestions]);
 
   const skillSpendSuggestions = useMemo(() => {
     return skillDerived
@@ -1244,15 +897,125 @@ export default function RolemasterCharacterSheetEngine() {
         categoryName: skill.category?.name ?? "Unassigned",
         ranks: skill.ranks,
         ranksPerUpgrade: skill.newRanks,
+        currentTotal: skill.total,
         options: skill.category
-          ? rankCostOptions(skill.category.developmentCost, skill.newRanks)
+          ? rankCostOptions(skill.category.developmentCost, skill.newRanks, skill.ranks)
           : [],
         selectedUpgrades: selectedUpgradeCounts[`skill:${skill.id}`] ?? 0,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [skillDerived, selectedUpgradeCounts]);
 
+  const projectedSkillBonuses = useMemo(() => {
+    return skillSpendSuggestions.reduce((acc, skill) => {
+      const current = skillDerived.find((item) => item.id === skill.id);
+      const selectedOption = skill.options[skill.selectedUpgrades - 1];
+      const rankGain = selectedOption?.rankGain ?? 0;
+      const projectedRanks = skill.ranks + rankGain;
+
+      if (!current) {
+        acc[skill.id] = {
+          projectedRanks,
+          projectedTotal: skill.currentTotal,
+        };
+        return acc;
+      }
+
+      const projectedRank = rankValue(projectedRanks, current.progression);
+      const projectedCategoryTotal = current.category
+        ? (projectedCategoryBonuses[current.category.id]?.projectedTotal ?? current.categoryTotal)
+        : current.categoryTotal;
+
+      acc[skill.id] = {
+        projectedRanks,
+        projectedTotal: projectedRank + projectedCategoryTotal + current.itemBonus + current.specialBonus,
+      };
+      return acc;
+    }, {} as Record<string, { projectedRanks: number; projectedTotal: number }>);
+  }, [projectedCategoryBonuses, skillDerived, skillSpendSuggestions]);
+
   const dpRemaining = projectedDevelopmentPoints - dpSpent;
+
+  const availableTrainingPackages = useMemo(
+    () => TRAINING_PACKAGES.filter((p) => sheet.details.profession in p.professionCosts),
+    [sheet.details.profession]
+  );
+
+  const weaponAttackCategoryOptions = useMemo(
+    () => sheet.skillCategories.filter((category) => isWeaponCategory(category.name)),
+    [sheet.skillCategories]
+  );
+
+  useEffect(() => {
+    if (availableTrainingPackages.length === 0) {
+      setSelectedPackageName("");
+      return;
+    }
+    if (!selectedPackageName) return;
+    const stillValid = availableTrainingPackages.some((pkg) => pkg.name === selectedPackageName);
+    if (!stillValid) setSelectedPackageName("");
+  }, [availableTrainingPackages, selectedPackageName]);
+
+  const selectedPackage = useMemo(
+    () => TRAINING_PACKAGES.find((p) => p.name === selectedPackageName) ?? null,
+    [selectedPackageName]
+  );
+
+  const selectedPackageStatSlots = useMemo(
+    () => (selectedPackage ? parsePackageStatGainSlots(selectedPackage.statGains, sheet.details.realmOfPower) : []),
+    [selectedPackage, sheet.details.realmOfPower]
+  );
+
+  useEffect(() => {
+    if (!selectedPackage) {
+      setPendingPackageSkillChoices({});
+      setPendingPackageSpecials({});
+      setPendingPackageStatRolls([]);
+      return;
+    }
+
+    const nextSpecials: Record<number, boolean> = {};
+    selectedPackage.special.forEach((_, idx) => {
+      nextSpecials[idx] = idx === selectedPackage.special.length - 1;
+    });
+
+    const nextChoices: Record<number, PackageChoiceAllocation[]> = {};
+    selectedPackage.skills.forEach((grant, idx) => {
+      if (!isChoiceSkillGrant(grant.description, sheet.skillCategories, sheet.skills)) return;
+      const constraint = getChoiceConstraint(grant.description, sheet.skillCategories);
+      const categoryOptions = categoryOptionsForConstraint(constraint, sheet.skillCategories);
+      const existingSkillOptions = skillOptionsForConstraint(constraint, sheet.skills, sheet.skillCategories);
+      const defaultMode: PackageChoiceAllocation["mode"] = constraint.kind === "weaponAttackCategoryChoice"
+        ? "category"
+        : constraint.kind === "any"
+          ? "skill"
+          : existingSkillOptions.length > 0
+            ? "skill"
+            : "newSkill";
+      const defaultCategoryId = categoryOptions[0]?.id ?? sheet.skillCategories[0]?.id ?? "";
+      nextChoices[idx] = [{
+        id: uid("choice"),
+        mode: defaultMode,
+        targetId: "",
+        newSkillName: "",
+        newSkillCategoryId: defaultCategoryId,
+        ranks: grant.ranks,
+      }];
+    });
+
+    setPendingPackageSkillChoices(nextChoices);
+    setPendingPackageSpecials(nextSpecials);
+    setPendingPackageStatRolls(
+      selectedPackageStatSlots.map((slot) => ({
+        slotId: slot.id,
+        stat: slot.stat,
+        die1: 0,
+        die2: 0,
+        allowsChoice: slot.allowsChoice,
+        choiceGroup: slot.choiceGroup,
+      }))
+    );
+  }, [selectedPackage, selectedPackageStatSlots, sheet.skillCategories]);
 
   const setSheet = (updaterOrSheet: CharacterSheet | ((prev: CharacterSheet) => CharacterSheet)) => {
     setCharacters((prev) => prev.map((c) => c.id === activeCharacter.id
@@ -1275,7 +1038,7 @@ export default function RolemasterCharacterSheetEngine() {
     setExtraStatRolls([]);
     setTrainingPackageSpendName("");
     setTrainingPackageSpendCost(0);
-    setTrainingPackageInput(""); setTalentInput(""); setFlawInput(""); setDraggedSkillIndex(null);
+    setTalentInput(""); setFlawInput(""); setDraggedSkillIndex(null);
   };
 
   const removeCharacter = (id: string) => {
@@ -1299,7 +1062,7 @@ export default function RolemasterCharacterSheetEngine() {
     setExtraStatRolls([]);
     setTrainingPackageSpendName("");
     setTrainingPackageSpendCost(0);
-    setTrainingPackageInput(""); setTalentInput(""); setFlawInput(""); setDraggedSkillIndex(null);
+    setTalentInput(""); setFlawInput(""); setDraggedSkillIndex(null);
   };
 
   const confirmRemoveCharacter = (id: string, name: string) => {
@@ -1405,6 +1168,140 @@ export default function RolemasterCharacterSheetEngine() {
     setTrainingPackageSpendCost(0);
   };
 
+  const rollCastingOpenEnded = () => {
+    const result = rollOpenEndedD100();
+    setCastOpenEndedRoll(result.total);
+    setCastRollBreakdown(`${result.mode}: ${result.rolls.join(", ")}`);
+  };
+
+  const openSpellCastingAssistant = (listId: string, spellId: string) => {
+    setSelectedCastListId(listId);
+    setSelectedCastSpellId(spellId);
+    setIsCastAssistantOpen(true);
+  };
+
+  const castSelectedSpell = () => {
+    if (!selectedCastSpell) return;
+    updateSheet((prev) => ({
+      ...prev,
+      magic: {
+        ...prev.magic,
+        currentPP: clampNumber(prev.magic.currentPP + castPpCost),
+      },
+    }));
+    setLastCastSummary(
+      `${selectedCastSpell.name} cast at ${signed(castTotalModifier)}. PP spent: ${castPpCost}.`,
+    );
+    setIsCastAssistantOpen(false);
+  };
+
+  const addPackageChoiceAllocation = (grantIndex: number, defaultMode: PackageChoiceAllocation["mode"], defaultCategoryId: string) => {
+    setPendingPackageSkillChoices((prev) => {
+      const existing = prev[grantIndex] ?? [];
+      // Going from 1 to 2 allocations: clear the auto-ranks from the first so the user splits explicitly.
+      const updatedExisting = existing.length === 1
+        ? [{ ...existing[0], ranks: 0 }]
+        : existing;
+      const next: PackageChoiceAllocation = {
+        id: uid("choice"),
+        mode: defaultMode,
+        targetId: "",
+        newSkillName: "",
+        newSkillCategoryId: defaultCategoryId,
+        ranks: 0,
+      };
+      return { ...prev, [grantIndex]: [...updatedExisting, next] };
+    });
+  };
+
+  const updatePackageChoiceAllocation = (grantIndex: number, allocationId: string, patch: Partial<PackageChoiceAllocation>) => {
+    setPendingPackageSkillChoices((prev) => ({
+      ...prev,
+      [grantIndex]: (prev[grantIndex] ?? []).map((allocation) => allocation.id === allocationId ? { ...allocation, ...patch } : allocation),
+    }));
+  };
+
+  const removePackageChoiceAllocation = (grantIndex: number, allocationId: string) => {
+    setPendingPackageSkillChoices((prev) => ({
+      ...prev,
+      [grantIndex]: (prev[grantIndex] ?? []).filter((allocation) => allocation.id !== allocationId),
+    }));
+  };
+
+  const applyTrainingPackage = (pkg: TrainingPackage) => {
+    if (pkg.type === "L") {
+      const hasLifestyle = sheet.details.trainingPackages.some((name) => {
+        const existing = TRAINING_PACKAGES.find((p) => p.name === name);
+        return existing?.type === "L";
+      });
+      if (hasLifestyle) {
+        alert(`Cannot apply "${pkg.name}": a Lifestyle package is already applied. You can only have one Lifestyle package.`);
+        return;
+      }
+    }
+
+    const pendingChoices = pendingPackageSkillChoices;
+    const choiceValidationError = validateChoiceSkillGrants({
+      grants: pkg.skills,
+      pendingChoices,
+      categories: sheet.skillCategories,
+      skills: sheet.skills,
+    });
+    if (choiceValidationError) {
+      alert(choiceValidationError);
+      return;
+    }
+
+    const differentGroupStats = pendingPackageStatRolls
+      .filter((roll) => roll.choiceGroup === "different")
+      .map((roll) => roll.stat.toLowerCase());
+    if (differentGroupStats.length > 1 && new Set(differentGroupStats).size !== differentGroupStats.length) {
+      alert("Stat gain choices marked as different must not repeat the same stat.");
+      return;
+    }
+
+    const invalidRoll = pendingPackageStatRolls.find((roll) => !isValidDie(roll.die1) || !isValidDie(roll.die2));
+    if (invalidRoll) {
+      alert("Please enter valid 1-10 dice rolls for each training package stat gain.");
+      return;
+    }
+
+    const selectedSpecials = pkg.special
+      .map((item, idx) => ({ item, idx }))
+      .filter(({ idx }) => pendingPackageSpecials[idx])
+      .map(({ item }) => item.description);
+
+    const unresolvedGrants: string[] = [];
+
+    updateSheet((prev) => {
+      const applied = applyTrainingPackageToSheet({
+        prev,
+        pkg,
+        pendingChoices,
+        pendingStatRolls: pendingPackageStatRolls,
+        selectedSpecials,
+        uid,
+        clampNumber,
+      });
+      unresolvedGrants.push(...applied.unresolvedGrants);
+      return applied.nextSheet;
+    });
+
+    if (unresolvedGrants.length > 0) {
+      alert(`Some grants could not be matched and were skipped:\n- ${unresolvedGrants.join("\n- ")}`);
+    }
+
+    setSelectedPackageName("");
+    setPendingPackageSkillChoices({});
+    setPendingPackageSpecials({});
+    setPendingPackageStatRolls([]);
+    trainingPackageRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  const removeTrainingPackageAt = (index: number) => {
+    updateSheet((prev) => removeTrainingPackageAtFromSheet(prev, index));
+  };
+
   const addNewSkillFromLevelUp = () => {
     const name = newLevelUpSkillName.trim();
     if (!name) return;
@@ -1412,26 +1309,32 @@ export default function RolemasterCharacterSheetEngine() {
     if (!categoryId) return;
 
     const category = sheet.skillCategories.find((cat) => cat.id === categoryId);
-    updateSheet((prev) => ({
-      ...prev,
-      skills: [
-        ...prev.skills,
-        {
-          id: uid("skill"),
-          name,
-          categoryId,
-          ranks: 0,
-          newRanks: 1,
-          itemBonus: 0,
-          specialBonus: 0,
-          favorite: false,
-          fumble: "",
-          rangeModifications: "",
-        },
-      ],
-    }));
+    updateSheet((prev) => {
+      const isEveryman = prev.details.everymanSkills.some((entry) => entry.toLowerCase() === name.toLowerCase());
+      const isOccupational = prev.details.occupationalSkills.some((entry) => entry.toLowerCase() === name.toLowerCase());
+      const nextNewRanks = isOccupational ? 3 : isEveryman ? 2 : 1;
 
-    const firstUpgradeCost = parseDevelopmentCost(category?.developmentCost ?? "")[0];
+      return {
+        ...prev,
+        skills: [
+          ...prev.skills,
+          {
+            id: uid("skill"),
+            name,
+            categoryId,
+            ranks: 0,
+            newRanks: nextNewRanks,
+            itemBonus: 0,
+            specialBonus: 0,
+            favorite: false,
+            fumble: "",
+            rangeModifications: "",
+          },
+        ],
+      };
+    });
+
+    const firstUpgradeCost = parseDevelopmentCost(category?.developmentCost ?? "", 0)[0];
     if (firstUpgradeCost) {
       const rankGain = 1 * 1;
       addQuickSpend(`New Skill Upgrade x1: ${name} (+${rankGain} ranks)`, firstUpgradeCost);
@@ -1448,62 +1351,7 @@ export default function RolemasterCharacterSheetEngine() {
     const ok = window.confirm("Apply level up now? This updates stats, rank upgrades, level, and talent points.");
     if (!ok) return;
 
-    updateSheet((prev) => {
-      const categorySteps = new Map<string, number>();
-      const skillSteps = new Map<string, number>();
-
-      dpSpendEntries.forEach((entry) => {
-        if (!entry.itemKey) return;
-        const step = Math.max(0, entry.upgradeStep ?? 1);
-        if (entry.kind === "categoryUpgrade" && entry.itemKey.startsWith("cat:")) {
-          const id = entry.itemKey.slice(4);
-          categorySteps.set(id, Math.max(categorySteps.get(id) ?? 0, step));
-        }
-        if (entry.kind === "skillUpgrade" && entry.itemKey.startsWith("skill:")) {
-          const id = entry.itemKey.slice(6);
-          skillSteps.set(id, Math.max(skillSteps.get(id) ?? 0, step));
-        }
-      });
-
-      const nextStats = { ...prev.stats };
-      STAT_NAMES.forEach((stat) => {
-        nextStats[stat] = {
-          ...nextStats[stat],
-          temp: levelUpPreview[stat].temp,
-          potential: levelUpPreview[stat].potential,
-        };
-      });
-
-      const nextCategories = prev.skillCategories.map((cat) => {
-        const upgrades = categorySteps.get(cat.id) ?? 0;
-        if (upgrades <= 0) return cat;
-        return {
-          ...cat,
-          ranks: cat.ranks + upgrades * Math.max(1, cat.newRanks),
-        };
-      });
-
-      const nextSkills = prev.skills.map((skill) => {
-        const upgrades = skillSteps.get(skill.id) ?? 0;
-        if (upgrades <= 0) return skill;
-        return {
-          ...skill,
-          ranks: skill.ranks + upgrades * Math.max(1, skill.newRanks),
-        };
-      });
-
-      return {
-        ...prev,
-        stats: nextStats,
-        skillCategories: nextCategories,
-        skills: nextSkills,
-        details: {
-          ...prev.details,
-          level: prev.details.level + 1,
-          talentPoints: prev.details.talentPoints + 2,
-        },
-      };
-    });
+    updateSheet((prev) => applyLevelUpToSheet(prev, dpSpendEntries, levelUpPreview));
 
     setBaseStatRolls(makeEmptyBaseRolls());
     setDpSpendEntries([]);
@@ -1798,21 +1646,280 @@ export default function RolemasterCharacterSheetEngine() {
                     <label className="mb-1 block text-sm">Heroic Path</label>
                     <NumberInput value={sheet.details.heroicPath} onChange={(v) => updateSheet((prev) => ({ ...prev, details: { ...prev.details, heroicPath: clampNumber(v) } }))} />
                   </div>
-                  <div className="md:col-span-2">
+                  <div className="md:col-span-2" ref={trainingPackageRef}>
                     <label className="mb-1 block text-sm">Training Packages</label>
                     <div className="flex gap-2">
-                      <Input value={trainingPackageInput} onChange={(e) => setTrainingPackageInput(e.target.value)} placeholder="Add a package" />
-                      <Button type="button" variant="outline" onClick={() => {
-                        const trimmed = trainingPackageInput.trim();
-                        if (!trimmed) return;
-                        updateSheet((prev) => ({ ...prev, details: { ...prev.details, trainingPackages: [...prev.details.trainingPackages, trimmed] } }));
-                        setTrainingPackageInput("");
-                      }}><Plus className="h-4 w-4" /></Button>
+                      <Select value={selectedPackageName} onValueChange={(v) => setSelectedPackageName(v)}>
+                        <SelectTrigger><SelectValue placeholder="Select a package…" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Select a package…</SelectItem>
+                          {availableTrainingPackages.map((p) => (
+                            <SelectItem key={p.name} value={p.name}>
+                              {p.name} [{p.type === "L" ? "Lifestyle" : "Vocational"}, {p.professionCosts[sheet.details.profession]} DP]
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
+                    {selectedPackage && (
+                      <div className="mt-3 space-y-3 rounded-2xl border bg-slate-50 p-3 text-sm">
+                        <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
+                          <span><span className="font-medium text-slate-700">Type:</span> {selectedPackage.type === "L" ? "Lifestyle" : "Vocational"}</span>
+                          <span><span className="font-medium text-slate-700">Time:</span> {selectedPackage.time} months</span>
+                          <span><span className="font-medium text-slate-700">Money:</span> {selectedPackage.money} (creation-only)</span>
+                          {selectedPackage.statGains !== "none" && <span><span className="font-medium text-slate-700">Stat gain:</span> {selectedPackage.statGains}</span>}
+                        </div>
+
+                        {pendingPackageStatRolls.length > 0 && (
+                          <div className="space-y-2">
+                            <div className="font-medium text-slate-700">Stat Gain Rolls (2d10 each)</div>
+                            {pendingPackageStatRolls.map((roll, idx) => (
+                              <div key={roll.slotId} className="grid gap-2 rounded-xl border bg-white p-2 md:grid-cols-[1fr_100px_100px]">
+                                {roll.allowsChoice ? (
+                                  <Select
+                                    value={roll.stat}
+                                    onValueChange={(v) => setPendingPackageStatRolls((prev) => prev.map((entry) => entry.slotId === roll.slotId ? { ...entry, stat: v as StatName } : entry))}
+                                  >
+                                    <SelectTrigger><SelectValue placeholder={`Choose stat ${idx + 1}`} /></SelectTrigger>
+                                    <SelectContent>
+                                      {STAT_NAMES.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                                    </SelectContent>
+                                  </Select>
+                                ) : (
+                                  <div className="flex items-center rounded-lg border bg-slate-100 px-3 text-sm font-medium text-slate-700">{roll.stat}</div>
+                                )}
+                                <NumberInput value={roll.die1} min={0} onChange={(v) => setPendingPackageStatRolls((prev) => prev.map((entry) => entry.slotId === roll.slotId ? { ...entry, die1: v } : entry))} />
+                                <NumberInput value={roll.die2} min={0} onChange={(v) => setPendingPackageStatRolls((prev) => prev.map((entry) => entry.slotId === roll.slotId ? { ...entry, die2: v } : entry))} />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {selectedPackage.special.length > 0 && (
+                          <div>
+                            <div className="font-medium text-slate-700">Special Gains</div>
+                            <div className="mt-1 space-y-1">
+                              {selectedPackage.special.map((special, idx) => {
+                                const alwaysGranted = idx === selectedPackage.special.length - 1;
+                                const checked = alwaysGranted ? true : Boolean(pendingPackageSpecials[idx]);
+                                return (
+                                  <label key={`${special.description}_${idx}`} className="flex items-start gap-2 rounded-lg border bg-white px-2 py-1">
+                                    <Checkbox
+                                      checked={checked}
+                                      disabled={alwaysGranted}
+                                      onChange={(e) => setPendingPackageSpecials((prev) => ({ ...prev, [idx]: e.target.checked }))}
+                                    />
+                                    <span className="text-slate-700">
+                                      {special.description} <span className="font-medium">(+{special.bonus})</span>{alwaysGranted ? " (always granted)" : ""}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedPackage.skills.length > 0 && (
+                          <div>
+                            <div className="font-medium text-slate-700">Skill / Category Grants</div>
+                            <div className="mt-1 space-y-2">
+                              {selectedPackage.skills.map((grant, idx) => {
+                                const needsChoice = isChoiceSkillGrant(grant.description, sheet.skillCategories, sheet.skills);
+                                const maxTargets = parseChoiceMaxTargets(grant.description);
+                                const choiceAllocations = pendingPackageSkillChoices[idx] ?? [];
+                                const allocatedRanks = choiceAllocations.reduce((sum, allocation) => sum + clampNumber(allocation.ranks), 0);
+                                const constraint = getChoiceConstraint(grant.description, sheet.skillCategories);
+                                const categoryChoiceOptions = categoryOptionsForConstraint(constraint, sheet.skillCategories);
+                                const constrainedCategory = constraint.kind === "specificCategorySkills"
+                                  ? sheet.skillCategories.find((category) => category.id === constraint.categoryId) ?? null
+                                  : null;
+                                const skillChoiceOptions = skillOptionsForConstraint(constraint, sheet.skills, sheet.skillCategories);
+                                const hasExistingSkillOptions = skillChoiceOptions.length > 0;
+                                return (
+                                  <div key={`${grant.description}_${idx}`} className="rounded-lg border bg-white px-2 py-2">
+                                    <div className="text-slate-700">{grant.description}: <span className="font-medium">+{grant.ranks} ranks</span></div>
+                                    {needsChoice && (
+                                      <div className="mt-2 space-y-2">
+                                        {choiceAllocations.length > 1
+                                          ? <div className="text-xs text-slate-500">Allocate exactly {grant.ranks} ranks across up to {maxTargets} target(s). Currently: {allocatedRanks}.</div>
+                                          : maxTargets > 1
+                                            ? <div className="text-xs text-slate-500">Choose a target to receive all {grant.ranks} ranks, or add more targets to split them.</div>
+                                            : null
+                                        }
+                                        {constraint.kind === "specificCategorySkills" && constrainedCategory && (
+                                          <div className="text-xs text-slate-500">Targets must belong to {constrainedCategory.name}.</div>
+                                        )}
+                                        {constraint.kind === "categoryGroupSkills" && (
+                                          <div className="text-xs text-slate-500">Targets must belong to the {constraint.groupNames.join(" / ")} group.</div>
+                                        )}
+                                        {constraint.kind === "specificSkillList" && (
+                                          <div className="text-xs text-slate-500">Choose one of: {constraint.skillNames.join(" / ")}.</div>
+                                        )}
+                                        {choiceAllocations.map((allocation) => (
+                                          <div key={allocation.id} className={`grid gap-2 rounded-lg border bg-slate-50 p-2 ${choiceAllocations.length === 1 ? "md:grid-cols-[150px_1fr_40px]" : "md:grid-cols-[150px_1fr_120px_40px]"}`}>
+                                            {(() => {
+                                              const effectiveMode = effectiveAllocationMode(allocation, constraint, hasExistingSkillOptions);
+                                              return (
+                                                <>
+                                            {constraint.kind === "weaponAttackCategoryChoice" ? (
+                                              <div className="flex items-center rounded-md border bg-slate-100 px-2 text-xs font-medium text-slate-600">Attack Category</div>
+                                            ) : constraint.kind === "specificSkillList" ? (
+                                              <div className="flex items-center rounded-md border bg-slate-100 px-2 text-xs font-medium text-slate-600">Skill</div>
+                                            ) : constraint.kind === "spellLists" || constraint.kind === "specificCategorySkills" || constraint.kind === "categoryGroupSkills" ? (
+                                              hasExistingSkillOptions ? (
+                                                <Select
+                                                  value={effectiveMode === "newSkill" ? "newSkill" : "skill"}
+                                                  onValueChange={(v) => updatePackageChoiceAllocation(idx, allocation.id, { mode: v as "skill" | "newSkill", targetId: "" })}
+                                                >
+                                                  <SelectTrigger><SelectValue /></SelectTrigger>
+                                                  <SelectContent>
+                                                    <SelectItem value="skill">Existing Skill</SelectItem>
+                                                    <SelectItem value="newSkill">New Skill</SelectItem>
+                                                  </SelectContent>
+                                                </Select>
+                                              ) : (
+                                                <div className="flex items-center rounded-md border bg-slate-100 px-2 text-xs font-medium text-slate-600">New Skill</div>
+                                              )
+                                            ) : (
+                                              <Select
+                                                value={allocation.mode}
+                                                onValueChange={(v) => updatePackageChoiceAllocation(idx, allocation.id, { mode: v as PackageChoiceAllocation["mode"], targetId: "" })}
+                                              >
+                                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                                <SelectContent>
+                                                  <SelectItem value="skill">Existing Skill</SelectItem>
+                                                  <SelectItem value="category">Skill Category</SelectItem>
+                                                  <SelectItem value="newSkill">New Skill</SelectItem>
+                                                </SelectContent>
+                                              </Select>
+                                            )}
+
+                                            {effectiveMode === "category" ? (
+                                              <Select
+                                                value={allocation.targetId}
+                                                onValueChange={(v) => updatePackageChoiceAllocation(idx, allocation.id, { targetId: v })}
+                                              >
+                                                <SelectTrigger><SelectValue placeholder="Choose category" /></SelectTrigger>
+                                                <SelectContent>
+                                                  <SelectItem value="">Choose category</SelectItem>
+                                                  {categoryChoiceOptions.map((category) => (
+                                                    <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>
+                                                  ))}
+                                                </SelectContent>
+                                              </Select>
+                                            ) : effectiveMode === "skill" ? (
+                                              <Select
+                                                value={allocation.targetId}
+                                                onValueChange={(v) => updatePackageChoiceAllocation(idx, allocation.id, { targetId: v })}
+                                              >
+                                                <SelectTrigger><SelectValue placeholder="Choose skill" /></SelectTrigger>
+                                                <SelectContent>
+                                                  <SelectItem value="">Choose skill</SelectItem>
+                                                  {[...skillChoiceOptions]
+                                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                                    .map((skill) => <SelectItem key={skill.id} value={skill.id}>{skill.name || "(Unnamed Skill)"}</SelectItem>)}
+                                                </SelectContent>
+                                              </Select>
+                                            ) : (
+                                              <div className="grid gap-2 md:grid-cols-[1fr_1fr]">
+                                                <Input
+                                                  placeholder="New skill name"
+                                                  value={allocation.newSkillName}
+                                                  onChange={(e) => updatePackageChoiceAllocation(idx, allocation.id, { newSkillName: e.target.value })}
+                                                />
+                                                {constraint.kind === "specificCategorySkills" ? (
+                                                  <div className="flex items-center rounded-md border bg-slate-100 px-2 text-xs font-medium text-slate-600">{constrainedCategory?.name ?? "Category"}</div>
+                                                ) : (
+                                                  <Select
+                                                    value={allocation.newSkillCategoryId}
+                                                    onValueChange={(v) => updatePackageChoiceAllocation(idx, allocation.id, { newSkillCategoryId: v })}
+                                                  >
+                                                    <SelectTrigger><SelectValue placeholder="Category" /></SelectTrigger>
+                                                    <SelectContent>
+                                                      <SelectItem value="">Choose category</SelectItem>
+                                                      {categoryChoiceOptions.map((category) => (
+                                                        <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>
+                                                      ))}
+                                                    </SelectContent>
+                                                  </Select>
+                                                )}
+                                              </div>
+                                            )}
+
+                                            {choiceAllocations.length > 1 && (
+                                            <NumberInput
+                                              value={allocation.ranks}
+                                              min={0}
+                                              onChange={(v) => updatePackageChoiceAllocation(idx, allocation.id, { ranks: clampNumber(v) })}
+                                            />
+                                            )}
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="icon"
+                                              disabled={choiceAllocations.length <= 1}
+                                              onClick={() => removePackageChoiceAllocation(idx, allocation.id)}
+                                            ><Trash2 className="h-4 w-4" /></Button>
+                                                </>
+                                              );
+                                            })()}
+                                          </div>
+                                        ))}
+                                        {maxTargets > 1 && choiceAllocations.length < maxTargets && (
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="h-8 rounded-xl px-3 text-xs"
+                                            onClick={() => addPackageChoiceAllocation(
+                                              idx,
+                                              constraint.kind === "weaponAttackCategoryChoice"
+                                                ? "category"
+                                                : hasExistingSkillOptions
+                                                  ? "skill"
+                                                  : "newSkill",
+                                              constraint.kind === "specificCategorySkills"
+                                                ? constraint.categoryId
+                                                : categoryChoiceOptions[0]?.id ?? sheet.skillCategories[0]?.id ?? ""
+                                            )}
+                                          >Add Choice Target</Button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedPackage.everymanSkills.length > 0 && (
+                          <div><span className="font-medium text-slate-700">Everyman skills (newRanks → 2):</span> {selectedPackage.everymanSkills.join(", ")}</div>
+                        )}
+                        {selectedPackage.occupationalSkills.length > 0 && (
+                          <div><span className="font-medium text-slate-700">Occupational skills (newRanks → 3):</span> {selectedPackage.occupationalSkills.join(", ")}</div>
+                        )}
+                        {selectedPackage.restrictedSkills.length > 0 && (
+                          <div><span className="font-medium text-red-600">Restricted skills (rank assignment disabled):</span> {selectedPackage.restrictedSkills.join(", ")}</div>
+                        )}
+                        <div className="flex justify-end border-t pt-3">
+                          <Button
+                            type="button"
+                            disabled={!selectedPackage}
+                            onClick={() => { if (selectedPackage) applyTrainingPackage(selectedPackage); }}
+                          >Apply</Button>
+                        </div>
+                      </div>
+                    )}
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {sheet.details.trainingPackages.map((pkg, i) => (
-                        <Badge key={`${pkg}_${i}`} className="rounded-2xl px-3 py-1">{pkg} <button className="ml-2" onClick={() => updateSheet((prev) => ({ ...prev, details: { ...prev.details, trainingPackages: prev.details.trainingPackages.filter((_, idx) => idx !== i) } }))}>×</button></Badge>
-                      ))}
+                      {sheet.details.trainingPackages.map((pkg, i) => {
+                        const pkgData = TRAINING_PACKAGES.find((p) => p.name === pkg);
+                        return (
+                          <Badge key={`${pkg}_${i}`} className="rounded-2xl px-3 py-1">
+                            {pkg}{pkgData ? ` [${pkgData.type === "L" ? "L" : "V"}]` : ""}
+                            {" "}<button className="ml-2" onClick={() => removeTrainingPackageAt(i)}>×</button>
+                          </Badge>
+                        );
+                      })}
                     </div>
                   </div>
                   <div className="md:col-span-2">
@@ -1994,9 +2101,20 @@ export default function RolemasterCharacterSheetEngine() {
                           <div className="space-y-2">
                             {categorySpendSuggestions.map((cat) => (
                               <div key={cat.id} className="rounded-xl border p-2 text-sm">
+                                {(() => {
+                                  const projected = projectedCategoryBonuses[cat.id];
+                                  const bonusDisplay = projected && projected.projectedTotal !== cat.currentTotal
+                                    ? `${cat.currentTotal} -> ${projected.projectedTotal}`
+                                    : `${cat.currentTotal}`;
+                                  const rankDisplay = projected && projected.projectedRanks !== cat.ranks
+                                    ? `${cat.ranks} -> ${projected.projectedRanks}`
+                                    : `${cat.ranks}`;
+
+                                  return (
+                                    <>
                                 <div className="min-w-0 flex-1">
                                   <div className="break-words font-medium">{cat.name}</div>
-                                  <div className="break-words text-xs text-slate-500">Ranks {cat.ranks} · Dev Cost {formatDevelopmentCostPath(categoryDerived.find((x) => x.id === cat.id)?.developmentCost ?? "")}</div>
+                                  <div className="break-words text-xs text-slate-500">Ranks {rankDisplay} · Bonus {bonusDisplay} · Dev Cost {formatDevelopmentCostPath(categoryDerived.find((x) => x.id === cat.id)?.developmentCost ?? "", cat.ranks)}</div>
                                 </div>
                                 <div className="mt-2 flex flex-wrap gap-1">
                                   <Button
@@ -2027,6 +2145,9 @@ export default function RolemasterCharacterSheetEngine() {
                                     </Button>
                                   )}
                                 </div>
+                                    </>
+                                  );
+                                })()}
                               </div>
                             ))}
                           </div>
@@ -2038,9 +2159,20 @@ export default function RolemasterCharacterSheetEngine() {
                           <div className="space-y-2">
                             {skillSpendSuggestions.map((skill) => (
                               <div key={skill.id} className="rounded-xl border p-2 text-sm">
+                                {(() => {
+                                  const projected = projectedSkillBonuses[skill.id];
+                                  const bonusDisplay = projected && projected.projectedTotal !== skill.currentTotal
+                                    ? `${skill.currentTotal} -> ${projected.projectedTotal}`
+                                    : `${skill.currentTotal}`;
+                                  const rankDisplay = projected && projected.projectedRanks !== skill.ranks
+                                    ? `${skill.ranks} -> ${projected.projectedRanks}`
+                                    : `${skill.ranks}`;
+
+                                  return (
+                                    <>
                                 <div className="min-w-0 flex-1">
                                   <div className="break-words font-medium">{skill.name}</div>
-                                  <div className="break-words text-xs text-slate-500">{skill.categoryName} · Ranks {skill.ranks} · Dev Cost {formatDevelopmentCostPath(skillDerived.find((x) => x.id === skill.id)?.category?.developmentCost ?? "")}</div>
+                                  <div className="break-words text-xs text-slate-500">{skill.categoryName} · Ranks {rankDisplay} · Bonus {bonusDisplay} · Dev Cost {formatDevelopmentCostPath(skillDerived.find((x) => x.id === skill.id)?.category?.developmentCost ?? "", skill.ranks)}</div>
                                 </div>
                                 <div className="mt-2 flex flex-wrap gap-1">
                                   <Button
@@ -2065,6 +2197,9 @@ export default function RolemasterCharacterSheetEngine() {
                                     </Button>
                                   )}
                                 </div>
+                                    </>
+                                  );
+                                })()}
                               </div>
                             ))}
                           </div>
@@ -2085,7 +2220,19 @@ export default function RolemasterCharacterSheetEngine() {
                     <div>
                       <div className="mb-2 text-sm font-medium">Training Package</div>
                       <div className="grid gap-2 lg:grid-cols-[1fr_120px_90px]">
-                        <Input placeholder="Package name" value={trainingPackageSpendName} onChange={(e) => setTrainingPackageSpendName(e.target.value)} />
+                        <Select value={trainingPackageSpendName} onValueChange={(v) => {
+                          setTrainingPackageSpendName(v);
+                          const pkg = TRAINING_PACKAGES.find((p) => p.name === v);
+                          const cost = pkg?.professionCosts[sheet.details.profession];
+                          if (cost !== undefined) setTrainingPackageSpendCost(cost);
+                        }}>
+                          <SelectTrigger><SelectValue placeholder="Select package…" /></SelectTrigger>
+                          <SelectContent>
+                            {TRAINING_PACKAGES.filter((p) => sheet.details.profession in p.professionCosts).map((p) => (
+                              <SelectItem key={p.name} value={p.name}>{p.name} [{p.professionCosts[sheet.details.profession]} DP]</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                         <NumberInput value={trainingPackageSpendCost} min={0} onChange={(v) => setTrainingPackageSpendCost(clampNumber(v))} />
                         <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={addTrainingPackageSpend}>Add</Button>
                       </div>
@@ -2268,7 +2415,10 @@ export default function RolemasterCharacterSheetEngine() {
                         </div>
                         <div className="mt-3 grid grid-cols-4 gap-2 rounded-2xl bg-slate-50 p-3 text-center text-sm">
                           <div><div className="text-xs text-slate-500">Stats</div><div className="font-semibold">{cat.applicableStatsDisplay}</div></div>
-                          <div><div className="text-xs text-slate-500">Dev</div><div className="font-semibold">{cat.developmentCost || "—"}</div></div>
+                          <div>
+                            <div className="text-xs text-slate-500">Dev</div>
+                            <div className="font-semibold">{formatDevelopmentCostPath(cat.developmentCost, cat.ranks) || "—"}</div>
+                          </div>
                           <div><div className="text-xs text-slate-500">Ranks</div><div className="font-semibold">{canEditCategoryNewRanks(cat.progressionType) ? cat.ranks : "—"}</div></div>
                           <div><div className="text-xs text-slate-500">Total</div><div className="font-semibold">{cat.total}</div></div>
                         </div>
@@ -2278,7 +2428,14 @@ export default function RolemasterCharacterSheetEngine() {
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div>
                             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Dev Cost</label>
-                            <Input value={cat.developmentCost} className="h-10" placeholder="2/5" onChange={(e) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, developmentCost: e.target.value } : c) }))} />
+                            {isBandedDevelopmentCost(cat.developmentCost) ? (
+                              <div className="rounded-2xl border bg-slate-50 p-3 text-sm">
+                                <div className="font-semibold">Current: {formatDevelopmentCostPath(cat.developmentCost, cat.ranks)}</div>
+                                <div className="mt-1 text-xs text-slate-500">{formatDevelopmentCostSchedule(cat.developmentCost)}</div>
+                              </div>
+                            ) : (
+                              <Input value={cat.developmentCost} className="h-10" placeholder="2/5" onChange={(e) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, developmentCost: e.target.value } : c) }))} />
+                            )}
                           </div>
                           <div>
                             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Profession</label>
@@ -2337,7 +2494,16 @@ export default function RolemasterCharacterSheetEngine() {
                         <tr key={cat.id} className="border-b align-middle">
                           <td className="py-2 px-2 font-medium">{cat.name}<div className="mt-1 text-xs text-slate-500">{formatProgression(cat.progression)}</div></td>
                           <td className="px-2 text-xs font-mono">{cat.applicableStatsDisplay}</td>
-                          <td className="px-2"><Input value={cat.developmentCost} className="w-16 h-8" placeholder="2/5" onChange={(e) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, developmentCost: e.target.value } : c) }))} /></td>
+                          <td className="px-2">
+                            {isBandedDevelopmentCost(cat.developmentCost) ? (
+                              <div className="min-w-[180px]">
+                                <div className="font-medium">{formatDevelopmentCostPath(cat.developmentCost, cat.ranks)}</div>
+                                <div className="mt-1 text-xs text-slate-500">{formatDevelopmentCostSchedule(cat.developmentCost)}</div>
+                              </div>
+                            ) : (
+                              <Input value={cat.developmentCost} className="w-16 h-8" placeholder="2/5" onChange={(e) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, developmentCost: e.target.value } : c) }))} />
+                            )}
+                          </td>
                           <td className="px-2">
                             {canEditCategoryNewRanks(cat.progressionType) ? (
                               <NumberInput value={cat.ranks} className="w-14" onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, ranks: clampNumber(v) } : c) }))} />
@@ -2440,7 +2606,11 @@ export default function RolemasterCharacterSheetEngine() {
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <div>
                           <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">New Ranks</label>
-                          <RankCheckboxes value={skill.newRanks} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, newRanks: v } : s) }))} />
+                          {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? (
+                            <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Restricted</span>
+                          ) : (
+                            <RankCheckboxes value={skill.newRanks} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, newRanks: v } : s) }))} />
+                          )}
                         </div>
                         <div className="ml-auto grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-3 text-center text-sm">
                           <div><div className="text-xs text-slate-500">Rank</div><div className="font-semibold">{skill.rank}</div></div>
@@ -2548,7 +2718,13 @@ export default function RolemasterCharacterSheetEngine() {
                             </Select>
                           </td>
                           <td className="px-2"><NumberInput value={skill.ranks} className="w-20" onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, ranks: clampNumber(v) } : s) }))} /></td>
-                          <td className="px-2"><RankCheckboxes value={skill.newRanks} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, newRanks: v } : s) }))} /></td>
+                          <td className="px-2">
+                            {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? (
+                              <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Restricted</span>
+                            ) : (
+                              <RankCheckboxes value={skill.newRanks} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, newRanks: v } : s) }))} />
+                            )}
+                          </td>
                           <td className="px-2">{skill.rank}</td>
                           <td className="px-2">{skill.categoryTotal}</td>
                           <td className="px-2"><NumberInput value={skill.itemBonus} className="w-20" onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, itemBonus: v } : s) }))} /></td>
@@ -2565,6 +2741,285 @@ export default function RolemasterCharacterSheetEngine() {
             </div>
           </TabsContent>
 
+          <TabsContent value="spells" className="space-y-4">
+            {(() => {
+              const hasMagicalRealm = sheet.details.realmOfPower.some((r) => r !== "Arms");
+              if (!hasMagicalRealm) {
+                return (
+                  <div className="rounded-2xl border bg-white p-6 text-center text-sm text-slate-500">
+                    This character has no magical realm and cannot cast spells.
+                  </div>
+                );
+              }
+              const LIST_TYPE_ORDER: SpellListType[] = ["Base", "Open", "Closed", "Training Package"];
+              const groups = LIST_TYPE_ORDER
+                .map((type) => ({ type, lists: spellTabLists.filter((l) => l.entry.type === type) }))
+                .filter((g) => g.lists.length > 0);
+              if (groups.length === 0) {
+                return (
+                  <div className="rounded-2xl border bg-white p-6 text-center text-sm text-slate-500">
+                    No spell lists yet. Add spell list skills under the Skills tab to see them here.
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-6">
+                  <div className="rounded-2xl border bg-white p-4 text-sm text-slate-600">
+                    Click a spell you can cast to open the Spell Casting Assistant.
+                  </div>
+
+                  {groups.map(({ type, lists }) => (
+                    <div key={type} className="space-y-3">
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{type} Lists</h3>
+                      {lists.map(({ entry, ranks }) => {
+                        const isExpanded = expandedSpellListIds.has(entry.id);
+                        return (
+                          <div key={entry.id} className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+                            <button
+                              type="button"
+                              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                              onClick={() => setExpandedSpellListIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(entry.id)) next.delete(entry.id);
+                                else next.add(entry.id);
+                                return next;
+                              })}
+                            >
+                              <div className="flex min-w-0 flex-1 items-center gap-3">
+                                <span className="font-semibold text-slate-800">{entry.name}</span>
+                                <Badge className="shrink-0 text-xs">{entry.realm}</Badge>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-3 text-sm text-slate-600">
+                                <span>Ranks: <span className={`font-semibold ${ranks === 0 ? "text-slate-400" : "text-slate-800"}`}>{ranks}</span></span>
+                                {isExpanded ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
+                              </div>
+                            </button>
+                            {isExpanded && (
+                              <div className="border-t">
+                                {/* Desktop table */}
+                                <div className="hidden overflow-x-auto md:block">
+                                  <table className="w-full text-sm">
+                                    <thead>
+                                      <tr className="border-b bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                                        <th className="w-12 px-3 py-2 text-center">Lvl</th>
+                                        <th className="px-3 py-2">Name</th>
+                                        <th className="px-3 py-2">AoE</th>
+                                        <th className="px-3 py-2">Duration</th>
+                                        <th className="px-3 py-2">Range</th>
+                                        <th className="w-14 px-3 py-2 text-center">Type</th>
+                                        <th className="px-3 py-2">Description</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {entry.spells.map((spell) => {
+                                        const castable = spell.level <= ranks;
+                                        return (
+                                          <tr
+                                            key={spell.id}
+                                            className={`border-b last:border-0 ${castable ? "cursor-pointer hover:bg-emerald-50/50" : "opacity-40"}`}
+                                            onClick={castable ? () => openSpellCastingAssistant(entry.id, spell.id) : undefined}
+                                          >
+                                            <td className="px-3 py-2 text-center font-mono text-xs text-slate-500">{spell.level}</td>
+                                            <td className="px-3 py-2 font-medium">{spell.name}{spell.specialCodes.length > 0 ? ` ${spell.specialCodes.join("")}` : ""}</td>
+                                            <td className="px-3 py-2 text-xs text-slate-600">{spell.areaOfEffect}</td>
+                                            <td className="px-3 py-2 text-xs text-slate-600">{spell.duration}</td>
+                                            <td className="px-3 py-2 text-xs text-slate-600">{spell.range}</td>
+                                            <td className="px-3 py-2 text-center font-mono text-xs">{spell.typeCode ?? ""}{spell.subtypeCodes.length > 0 ? `(${spell.subtypeCodes.join("")})` : ""}</td>
+                                            <td className="px-3 py-2 text-xs text-slate-600">{spell.description}</td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                {/* Mobile cards */}
+                                <div className="space-y-2 p-3 md:hidden">
+                                  {entry.spells.map((spell) => {
+                                    const castable = spell.level <= ranks;
+                                    return (
+                                      <div
+                                        key={spell.id}
+                                        className={`rounded-xl border p-3 ${castable ? "cursor-pointer bg-white active:bg-emerald-50" : "bg-slate-50 opacity-50"}`}
+                                        onClick={castable ? () => openSpellCastingAssistant(entry.id, spell.id) : undefined}
+                                      >
+                                        <div className="flex items-start justify-between gap-2">
+                                          <div>
+                                            <span className="font-medium">{spell.name}{spell.specialCodes.length > 0 ? ` ${spell.specialCodes.join("")}` : ""}</span>
+                                            <span className="ml-2 font-mono text-xs text-slate-400">Lv.{spell.level}</span>
+                                          </div>
+                                          <span className="shrink-0 font-mono text-xs text-slate-500">{spell.typeCode ?? ""}{spell.subtypeCodes.length > 0 ? `(${spell.subtypeCodes.join("")})` : ""}</span>
+                                        </div>
+                                        <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-slate-500">
+                                          <span>AoE: {spell.areaOfEffect}</span>
+                                          <span>Dur: {spell.duration}</span>
+                                          <span>Rng: {spell.range}</span>
+                                        </div>
+                                        <p className="mt-1 text-xs text-slate-600">{spell.description}</p>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+
+                  {isCastAssistantOpen && selectedCastList && selectedCastSpell && (
+                    <div
+                      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 sm:p-6"
+                      onMouseDown={(event) => {
+                        castModalBackdropMouseDownRef.current = event.target === event.currentTarget;
+                      }}
+                      onMouseUp={(event) => {
+                        const shouldClose = castModalBackdropMouseDownRef.current && event.target === event.currentTarget;
+                        castModalBackdropMouseDownRef.current = false;
+                        if (shouldClose) setIsCastAssistantOpen(false);
+                      }}
+                      onMouseLeave={() => {
+                        castModalBackdropMouseDownRef.current = false;
+                      }}
+                    >
+                      <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto" onClick={(event) => event.stopPropagation()}>
+                        <SectionCard
+                          title="Spell Casting Assistant"
+                          action={(
+                            <div className="flex items-center gap-2">
+                              <Badge>{signed(castTotalModifier)}</Badge>
+                              <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setIsCastAssistantOpen(false)}>
+                                Close
+                              </Button>
+                            </div>
+                          )}
+                        >
+                          <div className="space-y-3">
+                            <div className="rounded-2xl border bg-white p-3 text-sm">
+                              <div className="font-semibold text-slate-800">{selectedCastSpell.name}{selectedCastSpell.specialCodes.length > 0 ? ` ${selectedCastSpell.specialCodes.join("")}` : ""}</div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {selectedCastList.entry.name} • {selectedCastList.entry.realm} {selectedCastList.entry.type} • Level {selectedCastSpell.level}
+                              </div>
+                            </div>
+
+                            <div className="grid gap-2 rounded-2xl border bg-slate-50 p-3 text-sm md:grid-cols-4">
+                              <div>Realm: <span className="font-semibold">{castRealm}</span></div>
+                              <div>Level Delta: <span className="font-semibold">{castLevelDelta}</span></div>
+                              <div>Instant: <span className="font-semibold">{castIsInstantaneous ? "Yes" : "No"}</span></div>
+                              <div>PP Cost: <span className="font-semibold">{castPpCost}</span></div>
+                            </div>
+
+                            <div className="grid gap-2 md:grid-cols-4">
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Prep Rounds</label>
+                                <NumberInput value={castPrepRounds} min={0} onChange={(v) => setCastPrepRounds(clampNumber(v))} />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Free Hands</label>
+                                <Select value={castFreeHands} onValueChange={(v) => setCastFreeHands(v as FreeHandsMode)}>
+                                  <SelectTrigger><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">None</SelectItem>
+                                    <SelectItem value="one">One</SelectItem>
+                                    <SelectItem value="two">Two</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Voice</label>
+                                <Select value={castVoice} onValueChange={(v) => setCastVoice(v as VoiceMode)}>
+                                  <SelectTrigger><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">None</SelectItem>
+                                    <SelectItem value="whisper">Whisper</SelectItem>
+                                    <SelectItem value="normal">Normal</SelectItem>
+                                    <SelectItem value="shout">Shout</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Helmet</label>
+                                <Select value={castHelmet} onValueChange={(v) => setCastHelmet(v as HelmetMode)}>
+                                  <SelectTrigger><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="none">None</SelectItem>
+                                    <SelectItem value="leather">Leather</SelectItem>
+                                    <SelectItem value="leatherMetal">Leather and Metal</SelectItem>
+                                    <SelectItem value="metal">Metal</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+
+                            <div className="grid gap-2 md:grid-cols-3">
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Organic Living Weight</label>
+                                <NumberInput value={castOrganicLivingWeight} min={0} onChange={(v) => setCastOrganicLivingWeight(clampNumber(v))} />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Organic Non-Living Weight</label>
+                                <NumberInput value={castOrganicNonLivingWeight} min={0} onChange={(v) => setCastOrganicNonLivingWeight(clampNumber(v))} />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Inorganic Weight</label>
+                                <NumberInput value={castInorganicWeight} min={0} onChange={(v) => setCastInorganicWeight(clampNumber(v))} />
+                              </div>
+                            </div>
+
+                            <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Open Ended 1d100</label>
+                                <NumberInput value={castOpenEndedRoll} onChange={setCastOpenEndedRoll} />
+                                {castRollBreakdown && <div className="mt-1 text-xs text-slate-500">{castRollBreakdown}</div>}
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Manual Modifier</label>
+                                <NumberInput value={castManualModifier} onChange={setCastManualModifier} />
+                              </div>
+                              <div className="flex items-end">
+                                <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={rollCastingOpenEnded}>Roll d100 OE</Button>
+                              </div>
+                            </div>
+
+                            <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                              <Checkbox checked={castSnapAction} onChange={(e) => setCastSnapAction(e.target.checked)} disabled={castIsInstantaneous} />
+                              Cast as Snap Action (non-instantaneous only)
+                            </label>
+
+                            <div className="rounded-2xl border">
+                              <div className="grid grid-cols-[1fr_auto] border-b bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                <span>Modifier</span>
+                                <span>Total</span>
+                              </div>
+                              {castModifierRows.map((row) => (
+                                <div key={row.label} className="grid grid-cols-[1fr_auto] px-3 py-2 text-sm border-b last:border-b-0">
+                                  <span>{row.label}</span>
+                                  <span className="font-semibold">{signed(row.value)}</span>
+                                </div>
+                              ))}
+                              <div className="grid grid-cols-[1fr_auto] px-3 py-2 text-sm font-bold">
+                                <span>Casting Modifier</span>
+                                <span>{signed(castTotalModifier)}</span>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="text-sm text-slate-600">PP used: {sheet.magic.currentPP} / {totalPP}</div>
+                              <Button type="button" className="rounded-2xl" disabled={!selectedCastSpell} onClick={castSelectedSpell}>
+                                Cast Spell and Spend {castPpCost} PP
+                              </Button>
+                            </div>
+                            {lastCastSummary && <div className="text-sm text-slate-600">{lastCastSummary}</div>}
+                          </div>
+                        </SectionCard>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </TabsContent>
+
           <TabsContent value="gear" className="space-y-4">
             <div className="grid gap-4 xl:grid-cols-2">
               <SectionCard title="Equipment and Gear" action={<Button variant="outline" className="rounded-2xl h-8 px-3 text-sm" onClick={() => updateSheet((prev) => ({ ...prev, equipment: [...prev.equipment, { id: uid("gear"), name: "", description: "", location: "", weight: 0 }] }))}><Plus className="mr-1 h-3 w-3" />Add Item</Button>}>
@@ -2578,6 +3033,18 @@ export default function RolemasterCharacterSheetEngine() {
                       <Button variant="ghost" size="icon" onClick={() => updateSheet((prev) => ({ ...prev, equipment: prev.equipment.filter((x) => x.id !== item.id) }))}><Trash2 className="h-4 w-4" /></Button>
                     </div>
                   ))}
+                  {sheet.details.trainingPackageApplications.some((app) => app.specialGains.length > 0) && (
+                    <div className="rounded-2xl border bg-white p-3 text-sm text-slate-600">
+                      <div className="font-medium text-slate-700">Gained Specials</div>
+                      <ul className="mt-2 list-inside list-disc space-y-1">
+                        {sheet.details.trainingPackageApplications.flatMap((app, appIdx) =>
+                          app.specialGains.map((special, specialIdx) => (
+                            <li key={`special_${appIdx}_${specialIdx}`}>{app.packageName}: {special}</li>
+                          ))
+                        )}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </SectionCard>
 
