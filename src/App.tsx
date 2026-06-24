@@ -179,7 +179,7 @@ function signed(value: number): string {
   return value >= 0 ? `+${value}` : String(value);
 }
 
-function NumberInput({ value, onChange, className = "", min }: { value: number; onChange: (v: number) => void; className?: string; min?: number }) {
+const NumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (v: number) => void; className?: string; min?: number; onKeyDown?: React.KeyboardEventHandler<HTMLInputElement> }>(function NumberInput({ value, onChange, className = "", min, onKeyDown }, ref) {
   const [localValue, setLocalValue] = React.useState<string>("");
   const [focused, setFocused] = React.useState(false);
 
@@ -192,6 +192,7 @@ function NumberInput({ value, onChange, className = "", min }: { value: number; 
 
   return (
     <Input
+      ref={ref}
       type="number"
       value={displayValue}
       min={min}
@@ -213,6 +214,7 @@ function NumberInput({ value, onChange, className = "", min }: { value: number; 
         if (normalized === "" || normalized === "-") return;
         onChange(Number(normalized));
       }}
+      onKeyDown={onKeyDown}
       onBlur={(e) => {
         setFocused(false);
         const raw = e.target.value;
@@ -228,7 +230,7 @@ function NumberInput({ value, onChange, className = "", min }: { value: number; 
       }}
     />
   );
-}
+});
 
 function RankCheckboxes({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   return (
@@ -261,7 +263,7 @@ function SectionCard({ title, children, action }: { title: string; children: Rea
 type CharacterEntry = { id: string; sheet: CharacterSheet };
 
 const TAB_OPTIONS = [
-  { value: "front", label: "Front" },
+  { value: "front", label: "Main" },
   { value: "details", label: "Details" },
   { value: "stats", label: "Stats" },
   { value: "combat", label: "Combat" },
@@ -282,9 +284,12 @@ export default function RolemasterCharacterSheetEngine() {
   const [activeTab, setActiveTab] = useState<ActiveView>("front");
   const [lastNonHelperTab, setLastNonHelperTab] = useState<TabValue>("front");
   const [expandedMobileSkillId, setExpandedMobileSkillId] = useState<string | null>(null);
+  const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
   const [expandedMobileStat, setExpandedMobileStat] = useState<StatName | null>(null);
   const [expandedMobileCategoryId, setExpandedMobileCategoryId] = useState<string | null>(null);
-    const [expandedSpellListIds, setExpandedSpellListIds] = useState<Set<string>>(() => new Set());
+  const [expandedSpellListIds, setExpandedSpellListIds] = useState<Set<string>>(() => new Set());
+  const [expandedGearItemId, setExpandedGearItemId] = useState<string | null>(null);
+  const [editingGearItemId, setEditingGearItemId] = useState<string | null>(null);
   const [baseStatRolls, setBaseStatRolls] = useState<Record<StatName, DicePair>>(() => makeEmptyBaseRolls());
   const [dpSpendEntries, setDpSpendEntries] = useState<DpSpendEntry[]>([]);
   const [extraStatRolls, setExtraStatRolls] = useState<ExtraStatRoll[]>([]);
@@ -311,16 +316,24 @@ export default function RolemasterCharacterSheetEngine() {
   const [castOpenEndedRoll, setCastOpenEndedRoll] = useState(0);
   const [castRollBreakdown, setCastRollBreakdown] = useState("");
   const [lastCastSummary, setLastCastSummary] = useState("");
+  const [selectedUseAction, setSelectedUseAction] = useState<{ label: string; name: string; bonus: number } | null>(null);
+  const [useActionDiceResult, setUseActionDiceResult] = useState(0);
+  const [useActionRollBreakdown, setUseActionRollBreakdown] = useState("");
+  const [useActionExtraModifier, setUseActionExtraModifier] = useState(0);
   const [talentInput, setTalentInput] = useState("");
   const [flawInput, setFlawInput] = useState("");
   const [transitionKey, setTransitionKey] = useState(0);
   const transitionDir = React.useRef<"left" | "right" | "fade">("fade");
   const [draggedSkillIndex, setDraggedSkillIndex] = useState<number | null>(null);
+  const [draggedGearIndex, setDraggedGearIndex] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const mobileCharacterTabsRef = useRef<HTMLDivElement | null>(null);
   const trainingPackageRef = useRef<HTMLDivElement | null>(null);
   const castModalBackdropMouseDownRef = useRef(false);
+  const skillModalBackdropMouseDownRef = useRef(false);
+  const gearModalBackdropMouseDownRef = useRef(false);
+  const useActionModalBackdropMouseDownRef = useRef(false);
 
   // Derive active sheet (fall back to first character)
   const activeCharacter = characters.find((c) => c.id === activeId) ?? characters[0];
@@ -362,8 +375,11 @@ export default function RolemasterCharacterSheetEngine() {
 
   useEffect(() => {
     setExpandedMobileSkillId(null);
+    setEditingSkillId(null);
     setExpandedMobileStat(null);
     setExpandedMobileCategoryId(null);
+    setExpandedGearItemId(null);
+    setEditingGearItemId(null);
     setBaseStatRolls(makeEmptyBaseRolls());
     setDpSpendEntries([]);
     setExtraStatRolls([]);
@@ -388,6 +404,10 @@ export default function RolemasterCharacterSheetEngine() {
     setCastOpenEndedRoll(0);
     setCastRollBreakdown("");
     setLastCastSummary("");
+    setSelectedUseAction(null);
+    setUseActionDiceResult(0);
+    setUseActionRollBreakdown("");
+    setUseActionExtraModifier(0);
   }, [activeCharacter.id]);
 
   useEffect(() => {
@@ -419,8 +439,10 @@ export default function RolemasterCharacterSheetEngine() {
     localStorage.setItem("rolemaster-party", JSON.stringify(characters));
   }, [characters, loaded]);
 
+  const isAnyModalOpen = isCastAssistantOpen || Boolean(editingSkillId) || Boolean(editingGearItemId) || Boolean(selectedUseAction);
+
   useEffect(() => {
-    if (!isCastAssistantOpen) return;
+    if (!isAnyModalOpen) return;
     const originalOverflow = document.body.style.overflow;
     const originalTouchAction = document.body.style.touchAction;
     document.body.style.overflow = "hidden";
@@ -429,7 +451,7 @@ export default function RolemasterCharacterSheetEngine() {
       document.body.style.overflow = originalOverflow;
       document.body.style.touchAction = originalTouchAction;
     };
-  }, [isCastAssistantOpen]);
+  }, [isAnyModalOpen]);
 
   const selectedRace = useMemo(
     () => RACES.find((r) => r.name === sheet.details.race) ?? RACES[0],
@@ -595,6 +617,16 @@ export default function RolemasterCharacterSheetEngine() {
     });
   }, [sheet.skills, categoryMap, selectedRace, sheet.details.realmOfPower]);
 
+  const editingSkill = useMemo(
+    () => skillDerived.find((skill) => skill.id === editingSkillId) ?? null,
+    [skillDerived, editingSkillId],
+  );
+
+  const editingGearItem = useMemo(
+    () => sheet.equipment.find((item) => item.id === editingGearItemId) ?? null,
+    [sheet.equipment, editingGearItemId],
+  );
+
   const bodyDevelopmentCategoryTotal = categoryDerived.find((c) => c.name === "Body Development")?.total ?? 0;
 
   const spellTabLists = useMemo(() => {
@@ -714,7 +746,7 @@ export default function RolemasterCharacterSheetEngine() {
   const totalPP = Math.max(0, powerPointTotal);
   const totalEP = Math.max(0, 40 + statTotals["Constitution"].total * 3 + raceExhaustionBonus + sheet.exhaustion.specialBonus);
 
-  const currentHitsPool = Math.max(0, totalHits - sheet.health.currentHits);
+  const currentHitsPool = totalHits - sheet.health.currentHits;
   const currentPPPool = Math.max(0, totalPP - sheet.magic.currentPP);
   const currentEPPool = Math.max(0, totalEP - sheet.exhaustion.currentEP);
 
@@ -767,6 +799,8 @@ export default function RolemasterCharacterSheetEngine() {
   const exhaustionThreshold75 = thresholdAt(totalEP, 75);
   const exhaustionThreshold90 = thresholdAt(totalEP, 90);
   const exhaustionThreshold100 = thresholdAt(totalEP, 100);
+
+  const selectedUseActionTotal = selectedUseAction ? useActionDiceResult + selectedUseAction.bonus + useActionExtraModifier : 0;
 
   const sortByCatThenName = (a: { name: string; category?: { name: string } | null }, b: { name: string; category?: { name: string } | null }) => {
     const catA = a.category?.name ?? "";
@@ -1026,19 +1060,62 @@ export default function RolemasterCharacterSheetEngine() {
 
   const updateSheet = (updater: (prev: CharacterSheet) => CharacterSheet) => setSheet(updater);
 
+  const updateSkill = (skillId: string, patch: Partial<Skill>) => {
+    updateSheet((prev) => ({
+      ...prev,
+      skills: prev.skills.map((entry) => (entry.id === skillId ? { ...entry, ...patch } : entry)),
+    }));
+  };
+
+  const addSkillFromSkillsTab = () => {
+    const newSkill: Skill = {
+      id: uid("skill"),
+      name: "",
+      categoryId: sheet.skillCategories[0]?.id ?? "",
+      ranks: 0,
+      newRanks: 1,
+      itemBonus: 0,
+      specialBonus: 0,
+      favorite: false,
+      fumble: "",
+      rangeModifications: "",
+    };
+    updateSheet((prev) => ({ ...prev, skills: [...prev.skills, newSkill] }));
+    setExpandedMobileSkillId(newSkill.id);
+    setEditingSkillId(newSkill.id);
+  };
+
+  const updateGearItem = (itemId: string, patch: Partial<EquipmentItem>) => {
+    updateSheet((prev) => ({
+      ...prev,
+      equipment: prev.equipment.map((entry) => (entry.id === itemId ? { ...entry, ...patch } : entry)),
+    }));
+  };
+
+  const addGearItem = () => {
+    const newItem: EquipmentItem = { id: uid("gear"), name: "", description: "", location: "", weight: 0 };
+    updateSheet((prev) => ({ ...prev, equipment: [...prev.equipment, newItem] }));
+    setExpandedGearItemId(newItem.id);
+    setEditingGearItemId(newItem.id);
+  };
+
   const addCharacter = () => {
     const entry: CharacterEntry = { id: uid("char"), sheet: makeDefaultSheet() };
     setCharacters((prev) => [...prev, entry]);
     setActiveId(entry.id);
     setExpandedMobileSkillId(null);
+    setEditingSkillId(null);
     setExpandedMobileStat(null);
     setExpandedMobileCategoryId(null);
+    setExpandedGearItemId(null);
+    setEditingGearItemId(null);
     setBaseStatRolls(makeEmptyBaseRolls());
     setDpSpendEntries([]);
     setExtraStatRolls([]);
     setTrainingPackageSpendName("");
     setTrainingPackageSpendCost(0);
     setTalentInput(""); setFlawInput(""); setDraggedSkillIndex(null);
+    setDraggedGearIndex(null);
   };
 
   const removeCharacter = (id: string) => {
@@ -1055,14 +1132,18 @@ export default function RolemasterCharacterSheetEngine() {
     setTransitionKey((k) => k + 1);
     setActiveId(id);
     setExpandedMobileSkillId(null);
+    setEditingSkillId(null);
     setExpandedMobileStat(null);
     setExpandedMobileCategoryId(null);
+    setExpandedGearItemId(null);
+    setEditingGearItemId(null);
     setBaseStatRolls(makeEmptyBaseRolls());
     setDpSpendEntries([]);
     setExtraStatRolls([]);
     setTrainingPackageSpendName("");
     setTrainingPackageSpendCost(0);
     setTalentInput(""); setFlawInput(""); setDraggedSkillIndex(null);
+    setDraggedGearIndex(null);
   };
 
   const confirmRemoveCharacter = (id: string, name: string) => {
@@ -1172,6 +1253,19 @@ export default function RolemasterCharacterSheetEngine() {
     const result = rollOpenEndedD100();
     setCastOpenEndedRoll(result.total);
     setCastRollBreakdown(`${result.mode}: ${result.rolls.join(", ")}`);
+  };
+
+  const openUseActionModal = (label: string, name: string, bonus: number) => {
+    setSelectedUseAction({ label, name, bonus });
+    setUseActionDiceResult(0);
+    setUseActionRollBreakdown("");
+    setUseActionExtraModifier(0);
+  };
+
+  const rollUseActionDice = () => {
+    const result = rollOpenEndedD100();
+    setUseActionDiceResult(result.total);
+    setUseActionRollBreakdown(`${result.mode}: ${result.rolls.join(", ")}`);
   };
 
   const openSpellCastingAssistant = (listId: string, spellId: string) => {
@@ -1472,31 +1566,50 @@ export default function RolemasterCharacterSheetEngine() {
             className={transitionDir.current === "left" ? "rm-slide-left" : transitionDir.current === "right" ? "rm-slide-right" : "rm-fade"}
           >
           <TabsContent value="front">
-            <div className="grid gap-4 xl:grid-cols-[280px_1fr_1fr]">
+            <div className="space-y-4">
+              <div className="sticky top-3 z-20 rounded-3xl border border-slate-200/80 bg-white/95 p-3 shadow-md backdrop-blur">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="truncate text-lg font-semibold text-slate-900">{sheet.details.characterName || "Unnamed hero"}</div>
+                    <div className="text-sm text-slate-500">Level {sheet.details.level} · {sheet.details.race} / {sheet.details.profession}</div>
+                  </div>
+                </div>
+                <div className="mt-3 rounded-3xl border border-slate-200/80 bg-slate-50/90 p-2 shadow-inner">
+                  <div className="grid w-full grid-cols-3 gap-1 sm:gap-2" data-no-tab-swipe="true">
+                    <div className="flex w-full min-w-0 items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 text-xs shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+                      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">Hits</span>
+                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, health: { ...prev.health, currentHits: prev.health.currentHits + 1 } }))}>-</Button>
+                      <div className="min-w-0 flex-1 text-center text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentHitsPool}</div>
+                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, health: { ...prev.health, currentHits: Math.max(0, prev.health.currentHits - 1) } }))}>+</Button>
+                      <span className="min-w-0 shrink-0 whitespace-nowrap text-[9px] text-slate-500 sm:text-[10px]">/{totalHits}</span>
+                    </div>
+                    <div className="flex w-full min-w-0 items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 text-xs shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+                      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">PP</span>
+                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, currentPP: prev.magic.currentPP + 1 } }))}>-</Button>
+                      <div className="min-w-0 flex-1 text-center text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentPPPool}</div>
+                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, currentPP: Math.max(0, prev.magic.currentPP - 1) } }))}>+</Button>
+                      <span className="min-w-0 shrink-0 whitespace-nowrap text-[9px] text-slate-500 sm:text-[10px]">/{totalPP}</span>
+                    </div>
+                    <div className="flex w-full min-w-0 items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 text-xs shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+                      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">EP</span>
+                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, currentEP: prev.exhaustion.currentEP + 1 } }))}>-</Button>
+                      <div className="min-w-0 flex-1 text-center text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentEPPool}</div>
+                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, currentEP: Math.max(0, prev.exhaustion.currentEP - 1) } }))}>+</Button>
+                      <span className="min-w-0 shrink-0 whitespace-nowrap text-[9px] text-slate-500 sm:text-[10px]">/{totalEP}</span>
+                    </div>
+                    <div className="mt-2 flex items-center gap-2 px-1 text-sm text-slate-600 sm:justify-end">
+                      <span className="shrink-0 whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-slate-500">DB</span>
+                      <span className="shrink-0 whitespace-nowrap font-medium tabular-nums text-slate-900">{totalNormalDB}</span>
+                      <span className="min-w-0 whitespace-nowrap text-[10px] text-slate-500 sm:text-xs">subtracted from attacks</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+
+              <div className="grid gap-4 xl:grid-cols-[280px_1fr_1fr]">
               {/* Left sidebar: overview + pools */}
               <div className="flex flex-col gap-4">
-                <Card className="rounded-3xl">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">{sheet.details.characterName || "Unnamed hero"}</CardTitle>
-                    <div className="text-sm text-slate-500">Level {sheet.details.level} · {sheet.details.race} / {sheet.details.profession}</div>
-                    <div className="text-xs text-slate-400">{sheet.details.realmOfPower.join(", ") || "—"}</div>
-                  </CardHeader>
-                  <CardContent className="space-y-1 text-sm pt-0">
-                    <div className="flex justify-between"><span className="text-slate-500">Dev Points</span><span className="font-medium">{developmentPoints}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">Talent / Drive / Heroic</span><span className="font-medium">{sheet.details.talentPoints} / {sheet.details.drivePoints} / {sheet.details.heroicPath}</span></div>
-                  </CardContent>
-                </Card>
-                <Card className="rounded-3xl">
-                  <CardHeader className="pb-2"><CardTitle className="text-base">Pools</CardTitle></CardHeader>
-                  <CardContent className="space-y-2 text-sm pt-0">
-                    <div className="flex items-center justify-between"><span>Hits</span><Badge>{currentHitsPool} / {totalHits}</Badge></div>
-                    <div className="flex items-center justify-between"><span>PP</span><Badge>{currentPPPool} / {totalPP}</Badge></div>
-                    <div className="flex items-center justify-between"><span>EP</span><Badge>{currentEPPool} / {totalEP}</Badge></div>
-                    <Separator />
-                    <div className="flex items-center justify-between"><span>Total Normal DB</span><Badge>{totalNormalDB}</Badge></div>
-                    <div className="flex items-center justify-between"><span>Quickness ×3</span><Badge>{armorQuicknessBonus}</Badge></div>
-                  </CardContent>
-                </Card>
               </div>
 
               {/* Middle: skills */}
@@ -1506,12 +1619,16 @@ export default function RolemasterCharacterSheetEngine() {
                   : <div className="overflow-y-auto md:max-h-[calc(100vh-340px)]">
                       <div className="space-y-2 md:hidden">
                         {commonlyUsedSkills.map((skill) => (
-                          <div key={skill.id} className="rounded-2xl border p-3 text-sm">
-                            <div className="font-medium">{skill.name}</div>
-                            {skill.category && <div className="text-xs text-slate-400">{skill.category.name}</div>}
-                            <div className="mt-2 flex items-center justify-between text-slate-600">
-                              <span>Ranks {skill.ranks}</span>
-                              <span className="font-semibold text-slate-900">{skill.total >= 0 ? "+" : ""}{skill.total}</span>
+                          <div key={skill.id} className="rounded-2xl border px-2 py-2 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate font-medium leading-tight text-slate-900">{skill.name}</div>
+                                {skill.category && <div className="truncate text-[10px] leading-tight text-slate-400">{skill.category.name}</div>}
+                              </div>
+                              <Button type="button" variant="outline" className="h-6 shrink-0 rounded-xl px-2 text-[10px]" onClick={() => openUseActionModal("Use Skill", skill.name, skill.total)}>Use Skill</Button>
+                            </div>
+                            <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-slate-600">
+                              <span className="truncate">Ranks {skill.ranks} · Bonus {skill.total >= 0 ? "+" : ""}{skill.total}</span>
                             </div>
                           </div>
                         ))}
@@ -1522,17 +1639,21 @@ export default function RolemasterCharacterSheetEngine() {
                             <th className="pb-2 font-normal">Skill</th>
                             <th className="pb-2 font-normal text-right pr-4">Ranks</th>
                             <th className="pb-2 font-normal text-right">Bonus</th>
+                            <th className="pb-2 font-normal text-right">Use</th>
                           </tr>
                         </thead>
                         <tbody>
                           {commonlyUsedSkills.map((skill) => (
                             <tr key={skill.id} className="border-b last:border-0">
-                              <td className="py-1.5 pr-4">
+                              <td className="py-1 pr-4">
                                 <div className="font-medium">{skill.name}</div>
                                 {skill.category && <div className="text-xs text-slate-400">{skill.category.name}</div>}
                               </td>
-                              <td className="py-1.5 text-right pr-4 tabular-nums">{skill.ranks}</td>
-                              <td className="py-1.5 text-right tabular-nums font-semibold">{skill.total >= 0 ? "+" : ""}{skill.total}</td>
+                              <td className="py-1 text-right pr-4 tabular-nums">{skill.ranks}</td>
+                              <td className="py-1 text-right tabular-nums font-semibold">{skill.total >= 0 ? "+" : ""}{skill.total}</td>
+                              <td className="py-1 text-right">
+                                <Button type="button" variant="outline" className="h-7 rounded-xl px-2 text-xs" onClick={() => openUseActionModal("Use Skill", skill.name, skill.total)}>Use</Button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1548,14 +1669,22 @@ export default function RolemasterCharacterSheetEngine() {
                   : <div className="overflow-y-auto md:max-h-[calc(100vh-340px)]">
                       <div className="space-y-2 md:hidden">
                         {commonlyUsedAttacks.map((skill) => (
-                          <div key={skill.id} className="rounded-2xl border p-3 text-sm">
-                            <div className="font-medium">{skill.name}</div>
-                            {skill.category && <div className="text-xs text-slate-400">{skill.category.name}</div>}
-                            <div className="mt-2 grid gap-1 text-sm text-slate-600">
-                              <div className="flex items-center justify-between"><span>Ranks</span><span>{skill.ranks}</span></div>
-                              <div className="flex items-center justify-between"><span>Bonus</span><span className="font-semibold text-slate-900">{skill.total >= 0 ? "+" : ""}{skill.total}</span></div>
-                              <div className="flex items-center justify-between"><span>Fumble</span><span>{skill.fumble || "—"}</span></div>
-                              <div className="flex items-center justify-between"><span>Range</span><span>{skill.rangeModifications || "—"}</span></div>
+                          <div key={skill.id} className="rounded-2xl border px-2 py-2 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate font-medium leading-tight text-slate-900">{skill.name}</div>
+                                {skill.category && <div className="truncate text-[10px] leading-tight text-slate-400">{skill.category.name}</div>}
+                              </div>
+                              <Button type="button" variant="outline" className="h-6 shrink-0 rounded-xl px-2 text-[10px]" onClick={() => openUseActionModal("Use Attack", skill.name, skill.total)}>Use Attack</Button>
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 text-[11px] text-slate-600">
+                              <span>Ranks {skill.ranks}</span>
+                              <span className="text-slate-300">·</span>
+                              <span>Bonus {skill.total >= 0 ? "+" : ""}{skill.total}</span>
+                              <span className="text-slate-300">·</span>
+                              <span>Fumble {skill.fumble || "—"}</span>
+                              <span className="text-slate-300">·</span>
+                              <span>Range {skill.rangeModifications || "—"}</span>
                             </div>
                           </div>
                         ))}
@@ -1568,6 +1697,7 @@ export default function RolemasterCharacterSheetEngine() {
                             <th className="pb-2 font-normal text-right pr-4">Bonus</th>
                             <th className="pb-2 font-normal text-right pr-4">Fumble</th>
                             <th className="pb-2 font-normal text-right">Range</th>
+                            <th className="pb-2 font-normal text-right">Use</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1581,6 +1711,9 @@ export default function RolemasterCharacterSheetEngine() {
                               <td className="py-1.5 text-right pr-4 tabular-nums font-semibold">{skill.total >= 0 ? "+" : ""}{skill.total}</td>
                               <td className="py-1.5 text-right pr-4">{skill.fumble || "—"}</td>
                               <td className="py-1.5 text-right">{skill.rangeModifications || "—"}</td>
+                              <td className="py-1.5 text-right">
+                                <Button type="button" variant="outline" className="h-8 rounded-xl px-2 text-xs" onClick={() => openUseActionModal("Use Attack", skill.name, skill.total)}>Use Attack</Button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1589,6 +1722,70 @@ export default function RolemasterCharacterSheetEngine() {
                 }
               </SectionCard>
             </div>
+            </div>
+            {selectedUseAction && (
+              <div
+                className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
+                onMouseDown={(event) => {
+                  useActionModalBackdropMouseDownRef.current = event.target === event.currentTarget;
+                }}
+                onMouseUp={(event) => {
+                  const shouldClose = useActionModalBackdropMouseDownRef.current && event.target === event.currentTarget;
+                  useActionModalBackdropMouseDownRef.current = false;
+                  if (shouldClose) setSelectedUseAction(null);
+                }}
+                onMouseLeave={() => {
+                  useActionModalBackdropMouseDownRef.current = false;
+                }}
+              >
+                <div className="mx-auto w-full max-w-2xl" onClick={(event) => event.stopPropagation()}>
+                  <SectionCard
+                    title={selectedUseAction.label}
+                    action={(
+                      <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setSelectedUseAction(null)}>
+                        Close
+                      </Button>
+                    )}
+                  >
+                    <div className="space-y-3">
+                      <div className="rounded-2xl border bg-white p-3 text-sm">
+                        <div className="font-semibold text-slate-800">{selectedUseAction.name}</div>
+                        <div className="mt-1 text-xs text-slate-500">Modifier: {signed(selectedUseAction.bonus)}</div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Additional Modifier</label>
+                        <NumberInput value={useActionExtraModifier} onChange={setUseActionExtraModifier} />
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                        <div>
+                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Dice Result</label>
+                          <NumberInput
+                            value={useActionDiceResult}
+                            onChange={setUseActionDiceResult}
+                            onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                rollUseActionDice();
+                              }
+                            }}
+                          />
+                          {useActionRollBreakdown && <div className="mt-1 text-xs text-slate-500">{useActionRollBreakdown}</div>}
+                        </div>
+                        <div className="flex items-end">
+                          <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={rollUseActionDice}>Roll d100</Button>
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border bg-slate-50 p-3 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-slate-500">Total</span>
+                          <span className="font-semibold text-slate-900">{signed(selectedUseActionTotal)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </SectionCard>
+                </div>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="details" className="space-y-4">
@@ -2536,14 +2733,25 @@ export default function RolemasterCharacterSheetEngine() {
 
           <TabsContent value="skills" className="space-y-4">
             <div className="grid gap-4">
-              <SectionCard title="Skills" action={<Button variant="outline" className="rounded-2xl h-8 px-3 text-sm" onClick={() => {
-                const newSkill = { id: uid("skill"), name: "", categoryId: sheet.skillCategories[0]?.id ?? "", ranks: 0, newRanks: 1, itemBonus: 0, specialBonus: 0, favorite: false, fumble: "", rangeModifications: "" };
-                updateSheet((prev) => ({ ...prev, skills: [...prev.skills, newSkill] }));
-                setExpandedMobileSkillId(newSkill.id);
-              }}><Plus className="mr-1 h-3 w-3" />Add Skill</Button>}>
+              <SectionCard title="Skills" action={<Button variant="outline" className="rounded-2xl h-8 px-3 text-sm" onClick={addSkillFromSkillsTab}><Plus className="mr-1 h-3 w-3" />Add Skill</Button>}>
                 <div className="space-y-3 md:hidden">
                   {skillDerived.map((skill, idx) => (
-                    <div key={skill.id} className="rounded-2xl border p-3">
+                    <div
+                      key={skill.id}
+                      className={`rounded-2xl border bg-white p-3 ${draggedSkillIndex === idx ? "opacity-50" : ""}`}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={() => {
+                        if (draggedSkillIndex === null || draggedSkillIndex === idx) return;
+                        updateSheet((prev) => {
+                          const next = [...prev.skills];
+                          const [removed] = next.splice(draggedSkillIndex, 1);
+                          next.splice(idx, 0, removed);
+                          return { ...prev, skills: next };
+                        });
+                        setDraggedSkillIndex(null);
+                      }}
+                      onDragEnd={() => setDraggedSkillIndex(null)}
+                    >
                       <div className="flex items-start justify-between gap-2">
                         <button
                           type="button"
@@ -2558,92 +2766,53 @@ export default function RolemasterCharacterSheetEngine() {
                             {isWeaponCategory(skill.category?.name ?? "") && <span>Fumble {skill.fumble || "—"}</span>}
                           </div>
                         </button>
-                        <button type="button" className="rounded-full p-1" onClick={() => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, favorite: !s.favorite } : s) }))}>
-                          <Star className={`h-5 w-5 ${skill.favorite ? "fill-current text-yellow-500" : "text-slate-300"}`} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            draggable
+                            className="h-8 rounded-xl px-2 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                            title="Drag to reorder"
+                            onDragStart={() => setDraggedSkillIndex(idx)}
+                            onDragEnd={() => setDraggedSkillIndex(null)}
+                          >
+                            ::
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-full p-1"
+                            onClick={() => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, favorite: !s.favorite } : s) }))}
+                            title="Favorite"
+                          >
+                            <Star className={`h-5 w-5 ${skill.favorite ? "fill-current text-yellow-500" : "text-slate-300"}`} />
+                          </button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-8 rounded-xl px-2 text-xs"
+                            onClick={() => setEditingSkillId(skill.id)}
+                          >Edit</Button>
+                          <Button type="button" variant="ghost" size="icon" onClick={() => {
+                            setExpandedMobileSkillId((prev) => prev === skill.id ? null : prev);
+                            setEditingSkillId((prev) => prev === skill.id ? null : prev);
+                            updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== skill.id) }));
+                          }}><Trash2 className="h-4 w-4" /></Button>
+                        </div>
                       </div>
                       {expandedMobileSkillId === skill.id && (
                         <>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        <div className="sm:col-span-2">
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Skill Name</label>
-                          <Input value={skill.name} placeholder="Skill name" onChange={(e) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, name: e.target.value } : s) }))} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Category</label>
-                          <Select value={skill.categoryId} onValueChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, categoryId: v } : s) }))}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {[...sheet.skillCategories].sort((a, b) => a.name.localeCompare(b.name)).map((cat) => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Ranks</label>
-                          <NumberInput value={skill.ranks} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, ranks: clampNumber(v) } : s) }))} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Item Bonus</label>
-                          <NumberInput value={skill.itemBonus} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, itemBonus: v } : s) }))} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Special Bonus</label>
-                          <NumberInput value={skill.specialBonus} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, specialBonus: v } : s) }))} />
-                        </div>
-                      </div>
-                      {isWeaponCategory(skill.category?.name ?? "") && (
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                          <div>
-                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Fumble</label>
-                            <Input value={skill.fumble} onChange={(e) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, fumble: e.target.value } : s) }))} />
-                          </div>
-                          <div>
-                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Range Mods</label>
-                            <Input value={skill.rangeModifications} onChange={(e) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, rangeModifications: e.target.value } : s) }))} />
-                          </div>
-                        </div>
-                      )}
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">New Ranks</label>
-                          {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? (
-                            <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Restricted</span>
-                          ) : (
-                            <RankCheckboxes value={skill.newRanks} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, newRanks: v } : s) }))} />
-                          )}
-                        </div>
-                        <div className="ml-auto grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-3 text-center text-sm">
-                          <div><div className="text-xs text-slate-500">Rank</div><div className="font-semibold">{skill.rank}</div></div>
-                          <div><div className="text-xs text-slate-500">Category</div><div className="font-semibold">{skill.categoryTotal}</div></div>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="h-9 rounded-2xl px-3 text-sm"
-                          disabled={idx === 0}
-                          onClick={() => updateSheet((prev) => {
-                            const next = [...prev.skills];
-                            [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-                            return { ...prev, skills: next };
-                          })}
-                        ><ChevronUp className="mr-1 h-4 w-4" />Up</Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="h-9 rounded-2xl px-3 text-sm"
-                          disabled={idx === skillDerived.length - 1}
-                          onClick={() => updateSheet((prev) => {
-                            const next = [...prev.skills];
-                            [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
-                            return { ...prev, skills: next };
-                          })}
-                        ><ChevronDown className="mr-1 h-4 w-4" />Down</Button>
-                        <Button type="button" variant="ghost" className="ml-auto h-9 rounded-2xl px-3 text-sm text-red-600" onClick={() => {
-                          setExpandedMobileSkillId((prev) => prev === skill.id ? null : prev);
-                          updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== skill.id) }));
-                        }}><Trash2 className="mr-1 h-4 w-4" />Delete</Button>
+                      <div className="mt-3 grid gap-2 rounded-xl bg-slate-50 p-3 text-sm sm:grid-cols-2">
+                        <div><span className="text-slate-500">Category:</span> <span className="font-medium text-slate-800">{skill.category?.name || "No category"}</span></div>
+                        <div><span className="text-slate-500">New Ranks:</span> <span className="font-medium text-slate-800">{sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? "Restricted" : skill.newRanks}</span></div>
+                        <div><span className="text-slate-500">Item Bonus:</span> <span className="font-medium text-slate-800">{skill.itemBonus >= 0 ? "+" : ""}{skill.itemBonus}</span></div>
+                        <div><span className="text-slate-500">Special Bonus:</span> <span className="font-medium text-slate-800">{skill.specialBonus >= 0 ? "+" : ""}{skill.specialBonus}</span></div>
+                        <div><span className="text-slate-500">Rank:</span> <span className="font-medium text-slate-800">{skill.rank}</span></div>
+                        <div><span className="text-slate-500">Category Total:</span> <span className="font-medium text-slate-800">{skill.categoryTotal >= 0 ? "+" : ""}{skill.categoryTotal}</span></div>
+                        {isWeaponCategory(skill.category?.name ?? "") && (
+                          <>
+                            <div><span className="text-slate-500">Fumble:</span> <span className="font-medium text-slate-800">{skill.fumble || "—"}</span></div>
+                            <div><span className="text-slate-500">Range Mods:</span> <span className="font-medium text-slate-800">{skill.rangeModifications || "—"}</span></div>
+                          </>
+                        )}
                       </div>
                         </>
                       )}
@@ -2701,36 +2870,32 @@ export default function RolemasterCharacterSheetEngine() {
                           </td>
                           <td className="py-2 px-2"><button onClick={() => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, favorite: !s.favorite } : s) }))}><Star className={`h-4 w-4 ${skill.favorite ? "fill-current text-yellow-500" : "text-slate-300"}`} /></button></td>
                           <td className="px-2">
-                            <Input value={skill.name} onChange={(e) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, name: e.target.value } : s) }))} />
+                            <div className="font-medium text-slate-800">{skill.name || "(Unnamed Skill)"}</div>
                             {isWeaponCategory(skill.category?.name ?? "") && (
-                              <div className="mt-1 flex gap-1">
-                                <Input className="h-6 text-xs px-1" placeholder="Fumble" value={skill.fumble} onChange={(e) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, fumble: e.target.value } : s) }))} />
-                                <Input className="h-6 text-xs px-1" placeholder="Range mods" value={skill.rangeModifications} onChange={(e) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, rangeModifications: e.target.value } : s) }))} />
+                              <div className="mt-1 text-xs text-slate-500">
+                                Fumble: {skill.fumble || "—"} | Range: {skill.rangeModifications || "—"}
                               </div>
                             )}
                           </td>
-                          <td className="px-2">
-                            <Select value={skill.categoryId} onValueChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, categoryId: v } : s) }))}>
-                              <SelectTrigger className="w-[250px]"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {[...sheet.skillCategories].sort((a, b) => a.name.localeCompare(b.name)).map((cat) => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          </td>
-                          <td className="px-2"><NumberInput value={skill.ranks} className="w-20" onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, ranks: clampNumber(v) } : s) }))} /></td>
-                          <td className="px-2">
-                            {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? (
-                              <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Restricted</span>
-                            ) : (
-                              <RankCheckboxes value={skill.newRanks} onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, newRanks: v } : s) }))} />
-                            )}
+                          <td className="px-2">{skill.category?.name ?? "No category"}</td>
+                          <td className="px-2 tabular-nums">{skill.ranks}</td>
+                          <td className="px-2 tabular-nums">
+                            {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? "Restricted" : skill.newRanks}
                           </td>
                           <td className="px-2">{skill.rank}</td>
                           <td className="px-2">{skill.categoryTotal}</td>
-                          <td className="px-2"><NumberInput value={skill.itemBonus} className="w-20" onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, itemBonus: v } : s) }))} /></td>
-                          <td className="px-2"><NumberInput value={skill.specialBonus} className="w-20" onChange={(v) => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, specialBonus: v } : s) }))} /></td>
+                          <td className="px-2 tabular-nums">{skill.itemBonus >= 0 ? "+" : ""}{skill.itemBonus}</td>
+                          <td className="px-2 tabular-nums">{skill.specialBonus >= 0 ? "+" : ""}{skill.specialBonus}</td>
                           <td className="px-2 font-semibold">{skill.total}</td>
-                          <td className="px-2"><Button variant="ghost" size="icon" onClick={() => updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== skill.id) }))}><Trash2 className="h-4 w-4" /></Button></td>
+                          <td className="px-2">
+                            <div className="flex items-center gap-1">
+                              <Button variant="outline" className="h-8 rounded-xl px-2 text-xs" onClick={() => setEditingSkillId(skill.id)}>Edit</Button>
+                              <Button variant="ghost" size="icon" onClick={() => {
+                                setEditingSkillId((prev) => prev === skill.id ? null : prev);
+                                updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== skill.id) }));
+                              }}><Trash2 className="h-4 w-4" /></Button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2739,6 +2904,89 @@ export default function RolemasterCharacterSheetEngine() {
               </ScrollArea>
               </SectionCard>
             </div>
+            {editingSkill && (
+              <div
+                className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
+                onMouseDown={(event) => {
+                  skillModalBackdropMouseDownRef.current = event.target === event.currentTarget;
+                }}
+                onMouseUp={(event) => {
+                  const shouldClose = skillModalBackdropMouseDownRef.current && event.target === event.currentTarget;
+                  skillModalBackdropMouseDownRef.current = false;
+                  if (shouldClose) setEditingSkillId(null);
+                }}
+                onMouseLeave={() => {
+                  skillModalBackdropMouseDownRef.current = false;
+                }}
+              >
+                <div className="mx-auto w-full max-w-3xl" onClick={(event) => event.stopPropagation()}>
+                  <SectionCard
+                    title="Edit Skill"
+                    action={(
+                      <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setEditingSkillId(null)}>
+                        Close
+                      </Button>
+                    )}
+                  >
+                    <div className="space-y-3">
+                      <div>
+                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Skill Name</label>
+                        <Input value={editingSkill.name} placeholder="Skill name" onChange={(e) => updateSkill(editingSkill.id, { name: e.target.value })} />
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Category</label>
+                          <Select value={editingSkill.categoryId} onValueChange={(v) => updateSkill(editingSkill.id, { categoryId: v })}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {[...sheet.skillCategories].sort((a, b) => a.name.localeCompare(b.name)).map((cat) => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Ranks</label>
+                          <NumberInput value={editingSkill.ranks} onChange={(v) => updateSkill(editingSkill.id, { ranks: clampNumber(v) })} />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Item Bonus</label>
+                          <NumberInput value={editingSkill.itemBonus} onChange={(v) => updateSkill(editingSkill.id, { itemBonus: v })} />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Special Bonus</label>
+                          <NumberInput value={editingSkill.specialBonus} onChange={(v) => updateSkill(editingSkill.id, { specialBonus: v })} />
+                        </div>
+                      </div>
+                      {isWeaponCategory(editingSkill.category?.name ?? "") && (
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div>
+                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Fumble</label>
+                            <Input value={editingSkill.fumble} onChange={(e) => updateSkill(editingSkill.id, { fumble: e.target.value })} />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Range Mods</label>
+                            <Input value={editingSkill.rangeModifications} onChange={(e) => updateSkill(editingSkill.id, { rangeModifications: e.target.value })} />
+                          </div>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap items-end justify-between gap-3">
+                        <div>
+                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">New Ranks</label>
+                          {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === editingSkill.name.toLowerCase()) ? (
+                            <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Restricted</span>
+                          ) : (
+                            <RankCheckboxes value={editingSkill.newRanks} onChange={(v) => updateSkill(editingSkill.id, { newRanks: v })} />
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-3 text-center text-sm">
+                          <div><div className="text-xs text-slate-500">Rank</div><div className="font-semibold">{editingSkill.rank}</div></div>
+                          <div><div className="text-xs text-slate-500">Total</div><div className="font-semibold">{editingSkill.total >= 0 ? "+" : ""}{editingSkill.total}</div></div>
+                        </div>
+                      </div>
+                    </div>
+                  </SectionCard>
+                </div>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="spells" className="space-y-4">
@@ -2869,7 +3117,7 @@ export default function RolemasterCharacterSheetEngine() {
 
                   {isCastAssistantOpen && selectedCastList && selectedCastSpell && (
                     <div
-                      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 sm:p-6"
+                      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
                       onMouseDown={(event) => {
                         castModalBackdropMouseDownRef.current = event.target === event.currentTarget;
                       }}
@@ -2882,7 +3130,7 @@ export default function RolemasterCharacterSheetEngine() {
                         castModalBackdropMouseDownRef.current = false;
                       }}
                     >
-                      <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto" onClick={(event) => event.stopPropagation()}>
+                      <div className="mx-auto w-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
                         <SectionCard
                           title="Spell Casting Assistant"
                           action={(
@@ -3022,17 +3270,76 @@ export default function RolemasterCharacterSheetEngine() {
 
           <TabsContent value="gear" className="space-y-4">
             <div className="grid gap-4 xl:grid-cols-2">
-              <SectionCard title="Equipment and Gear" action={<Button variant="outline" className="rounded-2xl h-8 px-3 text-sm" onClick={() => updateSheet((prev) => ({ ...prev, equipment: [...prev.equipment, { id: uid("gear"), name: "", description: "", location: "", weight: 0 }] }))}><Plus className="mr-1 h-3 w-3" />Add Item</Button>}>
+              <SectionCard title="Equipment and Gear" action={<Button variant="outline" className="rounded-2xl h-8 px-3 text-sm" onClick={addGearItem}><Plus className="mr-1 h-3 w-3" />Add Item</Button>}>
                 <div className="space-y-3">
-                  {sheet.equipment.map((item) => (
-                    <div key={item.id} className="grid gap-2 rounded-2xl border p-3 md:grid-cols-[1fr_2fr_1fr_120px_48px]">
-                      <Input placeholder="Item name" value={item.name} onChange={(e) => updateSheet((prev) => ({ ...prev, equipment: prev.equipment.map((x) => x.id === item.id ? { ...x, name: e.target.value } : x) }))} />
-                      <Input placeholder="Description" value={item.description} onChange={(e) => updateSheet((prev) => ({ ...prev, equipment: prev.equipment.map((x) => x.id === item.id ? { ...x, description: e.target.value } : x) }))} />
-                      <Input placeholder="Location" value={item.location} onChange={(e) => updateSheet((prev) => ({ ...prev, equipment: prev.equipment.map((x) => x.id === item.id ? { ...x, location: e.target.value } : x) }))} />
-                      <NumberInput value={item.weight} onChange={(v) => updateSheet((prev) => ({ ...prev, equipment: prev.equipment.map((x) => x.id === item.id ? { ...x, weight: v } : x) }))} />
-                      <Button variant="ghost" size="icon" onClick={() => updateSheet((prev) => ({ ...prev, equipment: prev.equipment.filter((x) => x.id !== item.id) }))}><Trash2 className="h-4 w-4" /></Button>
+                  {sheet.equipment.map((item, idx) => (
+                    <div
+                      key={item.id}
+                      className={`rounded-2xl border bg-white p-3 ${draggedGearIndex === idx ? "opacity-50" : ""}`}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={() => {
+                        if (draggedGearIndex === null || draggedGearIndex === idx) return;
+                        updateSheet((prev) => {
+                          const next = [...prev.equipment];
+                          const [removed] = next.splice(draggedGearIndex, 1);
+                          next.splice(idx, 0, removed);
+                          return { ...prev, equipment: next };
+                        });
+                        setDraggedGearIndex(null);
+                      }}
+                      onDragEnd={() => setDraggedGearIndex(null)}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => setExpandedGearItemId((prev) => prev === item.id ? null : item.id)}
+                        >
+                          <div className="font-medium">{item.name.trim() || "Unnamed item"}</div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                            <span>Location {item.location.trim() || "—"}</span>
+                            <span>Weight {item.weight}</span>
+                          </div>
+                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            draggable
+                            className="h-8 rounded-xl px-2 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                            title="Drag to reorder"
+                            onDragStart={() => setDraggedGearIndex(idx)}
+                            onDragEnd={() => setDraggedGearIndex(null)}
+                          >
+                            ::
+                          </button>
+                          <Button type="button" variant="outline" className="h-8 rounded-xl px-2 text-xs" onClick={() => setEditingGearItemId(item.id)}>Edit</Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              if (editingGearItemId === item.id) setEditingGearItemId(null);
+                              if (expandedGearItemId === item.id) setExpandedGearItemId(null);
+                              updateSheet((prev) => ({ ...prev, equipment: prev.equipment.filter((x) => x.id !== item.id) }));
+                            }}
+                          ><Trash2 className="h-4 w-4" /></Button>
+                        </div>
+                      </div>
+                      {expandedGearItemId === item.id && (
+                        <div className="mt-3 grid gap-2 rounded-xl bg-slate-50 p-3 text-sm md:grid-cols-2">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-slate-500">Description</div>
+                            <div className="mt-1 text-slate-700">{item.description.trim() || "—"}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-slate-500">Location</div>
+                            <div className="mt-1 text-slate-700">{item.location.trim() || "—"}</div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
+                  {sheet.equipment.length === 0 && <div className="text-sm text-slate-500">No equipment yet.</div>}
                   {sheet.details.trainingPackageApplications.some((app) => app.specialGains.length > 0) && (
                     <div className="rounded-2xl border bg-white p-3 text-sm text-slate-600">
                       <div className="font-medium text-slate-700">Gained Specials</div>
@@ -3045,6 +3352,27 @@ export default function RolemasterCharacterSheetEngine() {
                       </ul>
                     </div>
                   )}
+                  <div className="rounded-2xl border bg-white p-3">
+                    <div className="mb-2 text-sm font-medium text-slate-700">Spell Casting Modifiers</div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-sm">Spell Adder</label>
+                        <Input
+                          type="text"
+                          value={sheet.magic.spellAdder}
+                          onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellAdder: e.target.value } }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm">Spell Multiplier</label>
+                        <Input
+                          type="text"
+                          value={sheet.magic.spellMultiplier}
+                          onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellMultiplier: e.target.value } }))}
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </SectionCard>
 
@@ -3070,6 +3398,54 @@ export default function RolemasterCharacterSheetEngine() {
                 </div>
               </SectionCard>
             </div>
+            {editingGearItem && (
+              <div
+                className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
+                onMouseDown={(event) => {
+                  gearModalBackdropMouseDownRef.current = event.target === event.currentTarget;
+                }}
+                onMouseUp={(event) => {
+                  const shouldClose = gearModalBackdropMouseDownRef.current && event.target === event.currentTarget;
+                  gearModalBackdropMouseDownRef.current = false;
+                  if (shouldClose) setEditingGearItemId(null);
+                }}
+                onMouseLeave={() => {
+                  gearModalBackdropMouseDownRef.current = false;
+                }}
+              >
+                <div className="mx-auto w-full max-w-2xl" onClick={(event) => event.stopPropagation()}>
+                  <SectionCard
+                    title="Edit Equipment Item"
+                    action={(
+                      <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setEditingGearItemId(null)}>
+                        Close
+                      </Button>
+                    )}
+                  >
+                    <div className="grid gap-3">
+                      <div>
+                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Item Name</label>
+                        <Input placeholder="Item name" value={editingGearItem.name} onChange={(e) => updateGearItem(editingGearItem.id, { name: e.target.value })} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Description</label>
+                        <Textarea placeholder="Description" value={editingGearItem.description} onChange={(e) => updateGearItem(editingGearItem.id, { description: e.target.value })} />
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-[1fr_160px]">
+                        <div>
+                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Location</label>
+                          <Input placeholder="Location" value={editingGearItem.location} onChange={(e) => updateGearItem(editingGearItem.id, { location: e.target.value })} />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Weight</label>
+                          <NumberInput value={editingGearItem.weight} onChange={(v) => updateGearItem(editingGearItem.id, { weight: v })} />
+                        </div>
+                      </div>
+                    </div>
+                  </SectionCard>
+                </div>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="backup" className="space-y-4">
@@ -3118,22 +3494,6 @@ export default function RolemasterCharacterSheetEngine() {
                     <label className="mb-1 block text-sm">Current PP Used</label>
                     <NumberInput value={sheet.magic.currentPP} onChange={(v) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, currentPP: clampNumber(v) } }))} />
                   </div>
-                  <div>
-                    <label className="mb-1 block text-sm">Spell Adder</label>
-                    <Input
-                      type="text"
-                      value={sheet.magic.spellAdder}
-                      onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellAdder: e.target.value } }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm">Spell Multiplier</label>
-                    <Input
-                      type="text"
-                      value={sheet.magic.spellMultiplier}
-                      onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellMultiplier: e.target.value } }))}
-                    />
-                  </div>
                 </div>
               </SectionCard>
 
@@ -3144,16 +3504,12 @@ export default function RolemasterCharacterSheetEngine() {
                     <Input value={totalEP} readOnly />
                   </div>
                   <div>
-                    <label className="mb-1 block text-sm">Race Bonus</label>
-                    <Input value={raceExhaustionBonus} readOnly />
+                    <label className="mb-1 block text-sm">Special Bonus</label>
+                    <NumberInput value={sheet.exhaustion.specialBonus} onChange={(v) => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, specialBonus: v } }))} />
                   </div>
                   <div>
                     <label className="mb-1 block text-sm">Current EP Used</label>
                     <NumberInput value={sheet.exhaustion.currentEP} onChange={(v) => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, currentEP: clampNumber(v) } }))} />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm">Special Bonus</label>
-                    <NumberInput value={sheet.exhaustion.specialBonus} onChange={(v) => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, specialBonus: v } }))} />
                   </div>
                 </div>
               </SectionCard>
