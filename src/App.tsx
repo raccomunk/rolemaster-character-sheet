@@ -1576,28 +1576,40 @@ export default function RolemasterCharacterSheetEngine() {
                 </div>
                 <div className="mt-3 rounded-3xl border border-slate-200/80 bg-slate-50/90 p-2 shadow-inner">
                   <div className="grid w-full grid-cols-3 gap-1 sm:gap-2" data-no-tab-swipe="true">
-                    <div className="flex w-full min-w-0 items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 text-xs shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+                    <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
                       <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">Hits</span>
-                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, health: { ...prev.health, currentHits: prev.health.currentHits + 1 } }))}>-</Button>
-                      <div className="min-w-0 flex-1 text-center text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentHitsPool}</div>
-                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, health: { ...prev.health, currentHits: Math.max(0, prev.health.currentHits - 1) } }))}>+</Button>
-                      <span className="min-w-0 shrink-0 whitespace-nowrap text-[9px] text-slate-500 sm:text-[10px]">/{totalHits}</span>
+                      <div className="min-w-0 text-center sm:flex-1">
+                        <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentHitsPool}</span>
+                        <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalHits}</span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, health: { ...prev.health, currentHits: prev.health.currentHits + 1 } }))}>-</Button>
+                        <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, health: { ...prev.health, currentHits: Math.max(0, prev.health.currentHits - 1) } }))}>+</Button>
+                      </div>
                     </div>
-                    <div className="flex w-full min-w-0 items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 text-xs shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+                    <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
                       <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">PP</span>
-                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, currentPP: prev.magic.currentPP + 1 } }))}>-</Button>
-                      <div className="min-w-0 flex-1 text-center text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentPPPool}</div>
-                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, currentPP: Math.max(0, prev.magic.currentPP - 1) } }))}>+</Button>
-                      <span className="min-w-0 shrink-0 whitespace-nowrap text-[9px] text-slate-500 sm:text-[10px]">/{totalPP}</span>
+                      <div className="min-w-0 text-center sm:flex-1">
+                        <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentPPPool}</span>
+                        <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalPP}</span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, currentPP: prev.magic.currentPP + 1 } }))}>-</Button>
+                        <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, currentPP: Math.max(0, prev.magic.currentPP - 1) } }))}>+</Button>
+                      </div>
                     </div>
-                    <div className="flex w-full min-w-0 items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 text-xs shadow-sm sm:gap-2 sm:px-3 sm:py-2 sm:text-sm">
+                    <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
                       <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">EP</span>
-                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, currentEP: prev.exhaustion.currentEP + 1 } }))}>-</Button>
-                      <div className="min-w-0 flex-1 text-center text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentEPPool}</div>
-                      <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, currentEP: Math.max(0, prev.exhaustion.currentEP - 1) } }))}>+</Button>
-                      <span className="min-w-0 shrink-0 whitespace-nowrap text-[9px] text-slate-500 sm:text-[10px]">/{totalEP}</span>
+                      <div className="min-w-0 text-center sm:flex-1">
+                        <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentEPPool}</span>
+                        <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalEP}</span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, currentEP: prev.exhaustion.currentEP + 1 } }))}>-</Button>
+                        <Button type="button" variant="outline" className="h-6 rounded-xl px-1.5 text-[10px] sm:h-7 sm:px-2 sm:text-xs" onClick={() => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, currentEP: Math.max(0, prev.exhaustion.currentEP - 1) } }))}>+</Button>
+                      </div>
                     </div>
-                    <div className="mt-2 flex items-center gap-2 px-1 text-sm text-slate-600 sm:justify-end">
+                    <div className="col-span-3 mt-1 flex items-center gap-2 px-1 text-sm text-slate-600 sm:justify-end">
                       <span className="shrink-0 whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-slate-500">DB</span>
                       <span className="shrink-0 whitespace-nowrap font-medium tabular-nums text-slate-900">{totalNormalDB}</span>
                       <span className="min-w-0 whitespace-nowrap text-[10px] text-slate-500 sm:text-xs">subtracted from attacks</span>
