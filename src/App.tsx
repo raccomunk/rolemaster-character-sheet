@@ -179,7 +179,7 @@ function signed(value: number): string {
   return value >= 0 ? `+${value}` : String(value);
 }
 
-const NumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (v: number) => void; className?: string; min?: number; onKeyDown?: React.KeyboardEventHandler<HTMLInputElement> }>(function NumberInput({ value, onChange, className = "", min, onKeyDown }, ref) {
+const NumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (v: number) => void; className?: string; min?: number; max?: number; onKeyDown?: React.KeyboardEventHandler<HTMLInputElement> }>(function NumberInput({ value, onChange, className = "", min, max, onKeyDown }, ref) {
   const [localValue, setLocalValue] = React.useState<string>("");
   const [focused, setFocused] = React.useState(false);
 
@@ -196,6 +196,7 @@ const NumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange
       type="number"
       value={displayValue}
       min={min}
+      max={max}
       className={`h-8 ${className}`.trim()}
       onFocus={(e) => {
         setFocused(true);
@@ -295,6 +296,8 @@ export default function RolemasterCharacterSheetEngine() {
   const [extraStatRolls, setExtraStatRolls] = useState<ExtraStatRoll[]>([]);
   const [newLevelUpSkillName, setNewLevelUpSkillName] = useState("");
   const [newLevelUpSkillCategoryId, setNewLevelUpSkillCategoryId] = useState("");
+  const [showNewSkillForm, setShowNewSkillForm] = useState(false);
+  const [showTrainingPackageForm, setShowTrainingPackageForm] = useState(false);
   const [trainingPackageSpendName, setTrainingPackageSpendName] = useState("");
   const [trainingPackageSpendCost, setTrainingPackageSpendCost] = useState(0);
   const [selectedPackageName, setSelectedPackageName] = useState("");
@@ -1428,11 +1431,6 @@ export default function RolemasterCharacterSheetEngine() {
       };
     });
 
-    const firstUpgradeCost = parseDevelopmentCost(category?.developmentCost ?? "", 0)[0];
-    if (firstUpgradeCost) {
-      const rankGain = 1 * 1;
-      addQuickSpend(`New Skill Upgrade x1: ${name} (+${rankGain} ranks)`, firstUpgradeCost);
-    }
     setNewLevelUpSkillName("");
   };
 
@@ -2213,39 +2211,21 @@ export default function RolemasterCharacterSheetEngine() {
           <TabsContent value="levelUp" className="space-y-4" data-no-tab-swipe="true">
             <div className="grid min-w-0 gap-4 xl:grid-cols-2">
               <SectionCard title="Stat Increase Rolls" action={<Button type="button" variant="outline" className="rounded-2xl h-8 px-3 text-sm" onClick={closeLevelUpHelper}>Close</Button>}>
-                <div className="mb-3 text-sm text-slate-500">Enter 2d10 rolls if using the assistant. You can leave these blank and commit level up using manually updated stats.</div>
-                <div className="space-y-3">
+                <div className="mb-2 text-xs text-slate-500">Enter 2d10 rolls to calculate stat gains. Leave blank to skip.</div>
+                <div className="space-y-1">
                   {STAT_NAMES.map((stat) => {
                     const baseRoll = baseStatRolls[stat];
                     const preview = levelUpPreview[stat];
                     return (
-                      <div key={stat} className="rounded-2xl border p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="font-medium">{stat}</div>
-                          <Badge>{sheet.stats[stat].temp}{" -> "}{preview.temp} / {preview.potential}</Badge>
+                      <div key={stat} className="flex items-center gap-2 rounded-xl border px-3 py-2">
+                        <div className="w-36 shrink-0">
+                          <div className="text-sm font-medium">{stat}</div>
+                          <div className="text-[10px] text-slate-500">{sheet.stats[stat].temp}→{preview.temp}/{preview.potential}</div>
                         </div>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr]">
-                          <div>
-                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Die 1</label>
-                            <NumberInput
-                              value={baseRoll.die1}
-                              min={0}
-                              onChange={(v) => setBaseStatRolls((prev) => ({ ...prev, [stat]: { ...prev[stat], die1: v } }))}
-                            />
-                          </div>
-                          <div>
-                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Die 2</label>
-                            <NumberInput
-                              value={baseRoll.die2}
-                              min={0}
-                              onChange={(v) => setBaseStatRolls((prev) => ({ ...prev, [stat]: { ...prev[stat], die2: v } }))}
-                            />
-                          </div>
+                        <div className="ml-auto flex items-center gap-1.5">
+                          <NumberInput className="flex-1 sm:w-20" value={baseRoll.die1} min={0} max={10} onChange={(v) => setBaseStatRolls((prev) => ({ ...prev, [stat]: { ...prev[stat], die1: v } }))} />
+                          <NumberInput className="flex-1 sm:w-20" value={baseRoll.die2} min={0} max={10} onChange={(v) => setBaseStatRolls((prev) => ({ ...prev, [stat]: { ...prev[stat], die2: v } }))} />
                         </div>
-                        <div className="mt-2 text-xs text-slate-500">{preview.logs[0]}</div>
-                        {preview.logs.slice(1).map((line, idx) => (
-                          <div key={`${stat}_extra_${idx}`} className="mt-1 text-xs text-slate-500">{line}</div>
-                        ))}
                       </div>
                     );
                   })}
@@ -2254,52 +2234,10 @@ export default function RolemasterCharacterSheetEngine() {
 
               <SectionCard title="Development" action={<Badge>{dpRemaining} DP left</Badge>}>
                 <div className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Button type="button" variant="outline" className="h-8 rounded-2xl px-3 text-sm" onClick={addExtraStatRoll}><Plus className="mr-1 h-3 w-3" />Buy Extra Stat Roll (8 DP)</Button>
-                  </div>
-
                   <div className="rounded-2xl border p-3 text-sm">
                     <div className="flex items-center justify-between"><span>Available DP</span><span className="font-semibold">{projectedDevelopmentPoints}</span></div>
                     <div className="mt-1 flex items-center justify-between"><span>Spent DP</span><span className="font-semibold">{dpSpent}</span></div>
                     <div className="mt-1 flex items-center justify-between"><span>Remaining DP</span><span className={`font-semibold ${dpRemaining < 0 ? "text-red-600" : ""}`}>{dpRemaining}</span></div>
-                  </div>
-
-                  <div className="space-y-2">
-                    {dpSpendEntries.map((entry) => (
-                      <div key={entry.id} className="flex items-center justify-between gap-2 rounded-2xl border p-3 text-sm">
-                        <div className="min-w-0 flex-1">
-                          <div className="break-words font-medium">{entry.label}</div>
-                          <div className="text-xs text-slate-500">Cost {entry.cost} DP</div>
-                        </div>
-                        <Button variant="ghost" size="icon" onClick={() => setDpSpendEntries((prev) => prev.filter((x) => x.id !== entry.id))}><Trash2 className="h-4 w-4" /></Button>
-                      </div>
-                    ))}
-                    {dpSpendEntries.length === 0 && <div className="text-sm text-slate-500">No assisted purchases selected yet.</div>}
-                  </div>
-
-                  <div className="space-y-2">
-                    {extraStatRolls.map((roll) => (
-                      <div key={roll.id} className="rounded-2xl border p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="text-sm font-medium">Extra Stat Roll</div>
-                          <div className="flex items-center gap-2">
-                            <Badge>8 DP</Badge>
-                            <Button variant="ghost" size="icon" onClick={() => setExtraStatRolls((prev) => prev.filter((x) => x.id !== roll.id))}><Trash2 className="h-4 w-4" /></Button>
-                          </div>
-                        </div>
-                        <div className="grid gap-2 sm:grid-cols-3">
-                          <Select value={roll.stat} onValueChange={(v) => setExtraStatRolls((prev) => prev.map((x) => x.id === roll.id ? { ...x, stat: v as StatName } : x))}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {STAT_NAMES.map((stat) => <SelectItem key={stat} value={stat}>{stat}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                          <NumberInput value={roll.die1} min={0} onChange={(v) => setExtraStatRolls((prev) => prev.map((x) => x.id === roll.id ? { ...x, die1: v } : x))} />
-                          <NumberInput value={roll.die2} min={0} onChange={(v) => setExtraStatRolls((prev) => prev.map((x) => x.id === roll.id ? { ...x, die2: v } : x))} />
-                        </div>
-                      </div>
-                    ))}
-                    {extraStatRolls.length === 0 && <div className="text-sm text-slate-500">No extra stat rolls purchased.</div>}
                   </div>
 
                   <div className="space-y-3">
@@ -2415,36 +2353,90 @@ export default function RolemasterCharacterSheetEngine() {
                         </ScrollArea>
                       </div>
                     </div>
-                    <div className="grid gap-2 lg:grid-cols-[1fr_220px_90px]">
-                      <Input placeholder="New skill name" value={newLevelUpSkillName} onChange={(e) => setNewLevelUpSkillName(e.target.value)} />
-                      <Select value={newLevelUpSkillCategoryId} onValueChange={(v) => setNewLevelUpSkillCategoryId(v)}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {[...sheet.skillCategories].sort((a, b) => a.name.localeCompare(b.name)).map((cat) => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={addNewSkillFromLevelUp}>Add</Button>
+                    <div>
+                      <Button type="button" variant="outline" className="h-8 rounded-2xl px-3 text-sm" onClick={() => setShowNewSkillForm((p) => !p)}>
+                        <Plus className="mr-1 h-3 w-3" />{showNewSkillForm ? "Cancel" : "Add New Skill"}
+                      </Button>
+                      {showNewSkillForm && (
+                        <div className="mt-2 grid gap-2 lg:grid-cols-[1fr_220px_90px]">
+                          <Input placeholder="New skill name" value={newLevelUpSkillName} onChange={(e) => setNewLevelUpSkillName(e.target.value)} />
+                          <Select value={newLevelUpSkillCategoryId} onValueChange={(v) => setNewLevelUpSkillCategoryId(v)}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {[...sheet.skillCategories].sort((a, b) => a.name.localeCompare(b.name)).map((cat) => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={() => { addNewSkillFromLevelUp(); setShowNewSkillForm(false); }}>Add</Button>
+                        </div>
+                      )}
                     </div>
 
                     <div>
-                      <div className="mb-2 text-sm font-medium">Training Package</div>
-                      <div className="grid gap-2 lg:grid-cols-[1fr_120px_90px]">
-                        <Select value={trainingPackageSpendName} onValueChange={(v) => {
-                          setTrainingPackageSpendName(v);
-                          const pkg = TRAINING_PACKAGES.find((p) => p.name === v);
-                          const cost = pkg?.professionCosts[sheet.details.profession];
-                          if (cost !== undefined) setTrainingPackageSpendCost(cost);
-                        }}>
-                          <SelectTrigger><SelectValue placeholder="Select package…" /></SelectTrigger>
-                          <SelectContent>
-                            {TRAINING_PACKAGES.filter((p) => sheet.details.profession in p.professionCosts).map((p) => (
-                              <SelectItem key={p.name} value={p.name}>{p.name} [{p.professionCosts[sheet.details.profession]} DP]</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <NumberInput value={trainingPackageSpendCost} min={0} onChange={(v) => setTrainingPackageSpendCost(clampNumber(v))} />
-                        <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={addTrainingPackageSpend}>Add</Button>
-                      </div>
+                      <Button type="button" variant="outline" className="h-8 rounded-2xl px-3 text-sm" onClick={() => {
+                        if (showTrainingPackageForm) {
+                          setTrainingPackageSpendName("");
+                          setTrainingPackageSpendCost(0);
+                          setShowTrainingPackageForm(false);
+                        } else {
+                          const firstPkg = TRAINING_PACKAGES.find((p) => sheet.details.profession in p.professionCosts);
+                          if (firstPkg) {
+                            setTrainingPackageSpendName(firstPkg.name);
+                            setTrainingPackageSpendCost(firstPkg.professionCosts[sheet.details.profession] ?? 0);
+                          }
+                          setShowTrainingPackageForm(true);
+                        }
+                      }}>
+                        <Plus className="mr-1 h-3 w-3" />{showTrainingPackageForm ? "Cancel" : "Add Training Package"}
+                      </Button>
+                      {showTrainingPackageForm && (
+                        <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_90px]">
+                          <Select value={trainingPackageSpendName} onValueChange={(v) => {
+                            setTrainingPackageSpendName(v);
+                            const pkg = TRAINING_PACKAGES.find((p) => p.name === v);
+                            const cost = pkg?.professionCosts[sheet.details.profession];
+                            if (cost !== undefined) setTrainingPackageSpendCost(cost);
+                          }}>
+                            <SelectTrigger><SelectValue placeholder="Select package…" /></SelectTrigger>
+                            <SelectContent>
+                              {TRAINING_PACKAGES.filter((p) => sheet.details.profession in p.professionCosts).map((p) => (
+                                <SelectItem key={p.name} value={p.name}>{p.name} [{p.professionCosts[sheet.details.profession]} DP]</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={() => { addTrainingPackageSpend(); setShowTrainingPackageForm(false); }}>Add</Button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <Button type="button" variant="outline" className="h-8 rounded-2xl px-3 text-sm" onClick={addExtraStatRoll}>
+                        <Plus className="mr-1 h-3 w-3" />Buy Extra Stat Roll (8 DP)
+                      </Button>
+                      {extraStatRolls.length > 0 && (
+                        <div className="mt-2 space-y-2">
+                          {extraStatRolls.map((roll) => (
+                            <div key={roll.id} className="rounded-2xl border p-3">
+                              <div className="mb-2 flex items-center justify-between">
+                                <div className="text-sm font-medium">Extra Stat Roll</div>
+                                <div className="flex items-center gap-2">
+                                  <Badge>8 DP</Badge>
+                                  <Button variant="ghost" size="icon" onClick={() => setExtraStatRolls((prev) => prev.filter((x) => x.id !== roll.id))}><Trash2 className="h-4 w-4" /></Button>
+                                </div>
+                              </div>
+                              <div className="grid gap-2 sm:grid-cols-3">
+                                <Select value={roll.stat} onValueChange={(v) => setExtraStatRolls((prev) => prev.map((x) => x.id === roll.id ? { ...x, stat: v as StatName } : x))}>
+                                  <SelectTrigger><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    {STAT_NAMES.map((stat) => <SelectItem key={stat} value={stat}>{stat}</SelectItem>)}
+                                  </SelectContent>
+                                </Select>
+                                <NumberInput value={roll.die1} min={0} onChange={(v) => setExtraStatRolls((prev) => prev.map((x) => x.id === roll.id ? { ...x, die1: v } : x))} />
+                                <NumberInput value={roll.die2} min={0} onChange={(v) => setExtraStatRolls((prev) => prev.map((x) => x.id === roll.id ? { ...x, die2: v } : x))} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2452,10 +2444,65 @@ export default function RolemasterCharacterSheetEngine() {
             </div>
 
             <SectionCard title="Apply Level Up" action={<Button type="button" className="rounded-2xl" onClick={commitLevelUp}>Commit Level Up</Button>}>
-              <div className="grid gap-3 text-sm md:grid-cols-3">
-                <div className="rounded-2xl border p-3"><div className="text-slate-500">Current Level</div><div className="text-lg font-semibold">{sheet.details.level}</div></div>
-                <div className="rounded-2xl border p-3"><div className="text-slate-500">New Level</div><div className="text-lg font-semibold">{sheet.details.level + 1}</div></div>
-                <div className="rounded-2xl border p-3"><div className="text-slate-500">Talent Points</div><div className="text-lg font-semibold">{sheet.details.talentPoints}{" -> "}{sheet.details.talentPoints + 2}</div></div>
+              <div className="space-y-3 text-sm">
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-2xl border p-3">
+                    <div className="text-slate-500">Level</div>
+                    <div className="text-lg font-semibold">{sheet.details.level} → {sheet.details.level + 1}</div>
+                  </div>
+                  <div className="rounded-2xl border p-3">
+                    <div className="text-slate-500">Talent Points</div>
+                    <div className="text-lg font-semibold">{sheet.details.talentPoints} → {sheet.details.talentPoints + 2}</div>
+                  </div>
+                  <div className="rounded-2xl border p-3">
+                    <div className="text-slate-500">Development Points</div>
+                    <div className="font-semibold">{projectedDevelopmentPoints} available</div>
+                    <div className={`text-xs ${dpRemaining < 0 ? "text-red-600" : "text-slate-500"}`}>{dpSpent} spent · {dpRemaining} remaining</div>
+                  </div>
+                </div>
+
+                {(dpSpendEntries.length > 0 || extraStatRolls.length > 0) && (
+                  <div>
+                    <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Purchases</div>
+                    <div className="space-y-1">
+                      {dpSpendEntries.map((entry) => (
+                        <div key={entry.id} className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2">
+                          <span className="break-words font-medium">{entry.label}</span>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <Badge>{entry.cost} DP</Badge>
+                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setDpSpendEntries((prev) => prev.filter((x) => x.id !== entry.id))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                          </div>
+                        </div>
+                      ))}
+                      {extraStatRolls.map((roll) => (
+                        <div key={roll.id} className="flex items-center justify-between gap-2 rounded-xl border px-3 py-2">
+                          <span className="font-medium">Extra Stat Roll: {roll.stat}</span>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <Badge>8 DP</Badge>
+                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setExtraStatRolls((prev) => prev.filter((x) => x.id !== roll.id))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Stat Preview</div>
+                  <div className="space-y-1">
+                    {STAT_NAMES.map((stat) => {
+                      const preview = levelUpPreview[stat];
+                      const changed = preview.temp !== sheet.stats[stat].temp;
+                      return (
+                        <div key={stat} className="flex items-center gap-2 rounded-xl border px-3 py-1.5">
+                          <span className="w-28 shrink-0 font-medium">{stat}</span>
+                          <Badge className={`shrink-0 text-xs ${!changed ? "opacity-50" : ""}`}>{sheet.stats[stat].temp}→{preview.temp}/{preview.potential}</Badge>
+                          {preview.logs[0] && <span className="min-w-0 truncate text-xs text-slate-500">{preview.logs[0]}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </SectionCard>
           </TabsContent>
