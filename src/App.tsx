@@ -1258,6 +1258,16 @@ export default function RolemasterCharacterSheetEngine() {
     setCastRollBreakdown(`${result.mode}: ${result.rolls.join(", ")}`);
   };
 
+  const openSpellList = (skillName: string) => {
+    const listEntry = spellTabLists.find((l) => l.entry.name.toLowerCase() === skillName.toLowerCase());
+    if (listEntry) {
+      setExpandedSpellListIds((prev) => { const next = new Set(prev); next.add(listEntry.entry.id); return next; });
+    }
+    transitionDir.current = "fade";
+    setTransitionKey((k) => k + 1);
+    setActiveTab("spells");
+  };
+
   const openUseActionModal = (label: string, name: string, bonus: number) => {
     setSelectedUseAction({ label, name, bonus });
     setUseActionDiceResult(0);
@@ -1575,7 +1585,7 @@ export default function RolemasterCharacterSheetEngine() {
                 <div className="mt-3 rounded-3xl border border-slate-200/80 bg-slate-50/90 p-2 shadow-inner">
                   <div className="grid w-full grid-cols-3 gap-1 sm:gap-2" data-no-tab-swipe="true">
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">Hits</span>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => { transitionDir.current = "fade"; setTransitionKey((k) => k + 1); setActiveTab("status"); }}>Hits</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentHitsPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalHits}</span>
@@ -1586,7 +1596,7 @@ export default function RolemasterCharacterSheetEngine() {
                       </div>
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">PP</span>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => { transitionDir.current = "fade"; setTransitionKey((k) => k + 1); setActiveTab("status"); }}>PP</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentPPPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalPP}</span>
@@ -1597,7 +1607,7 @@ export default function RolemasterCharacterSheetEngine() {
                       </div>
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">EP</span>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => { transitionDir.current = "fade"; setTransitionKey((k) => k + 1); setActiveTab("status"); }}>EP</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentEPPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalEP}</span>
@@ -1635,7 +1645,10 @@ export default function RolemasterCharacterSheetEngine() {
                                 <div className="truncate font-medium leading-tight text-slate-900">{skill.name}</div>
                                 {skill.category && <div className="truncate text-[10px] leading-tight text-slate-400">{skill.category.name}</div>}
                               </div>
-                              <Button type="button" variant="outline" className="h-6 shrink-0 rounded-xl px-2 text-[10px]" onClick={() => openUseActionModal("Use Skill", skill.name, skill.total)}>Use Skill</Button>
+                              {skill.category?.name.startsWith("Spells •")
+                                ? <Button type="button" variant="outline" className="h-6 shrink-0 rounded-xl px-2 text-[10px]" onClick={() => openSpellList(skill.name)}>Spell List</Button>
+                                : <Button type="button" variant="outline" className="h-6 shrink-0 rounded-xl px-2 text-[10px]" onClick={() => openUseActionModal("Use Skill", skill.name, skill.total)}>Use Skill</Button>
+                              }
                             </div>
                             <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-slate-600">
                               <span className="truncate">Ranks {skill.ranks} · Bonus {skill.total >= 0 ? "+" : ""}{skill.total}</span>
@@ -1662,7 +1675,10 @@ export default function RolemasterCharacterSheetEngine() {
                               <td className="py-1 text-right pr-4 tabular-nums">{skill.ranks}</td>
                               <td className="py-1 text-right tabular-nums font-semibold">{skill.total >= 0 ? "+" : ""}{skill.total}</td>
                               <td className="py-1 text-right">
-                                <Button type="button" variant="outline" className="h-7 rounded-xl px-2 text-xs" onClick={() => openUseActionModal("Use Skill", skill.name, skill.total)}>Use</Button>
+                                {skill.category?.name.startsWith("Spells •")
+                                  ? <Button type="button" variant="outline" className="h-7 rounded-xl px-2 text-xs" onClick={() => openSpellList(skill.name)}>List</Button>
+                                  : <Button type="button" variant="outline" className="h-7 rounded-xl px-2 text-xs" onClick={() => openUseActionModal("Use Skill", skill.name, skill.total)}>Use</Button>
+                                }
                               </td>
                             </tr>
                           ))}
