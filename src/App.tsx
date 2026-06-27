@@ -327,6 +327,7 @@ export default function RolemasterCharacterSheetEngine() {
   const [flawInput, setFlawInput] = useState("");
   const [transitionKey, setTransitionKey] = useState(0);
   const transitionDir = React.useRef<"left" | "right" | "fade">("fade");
+  const activeTabRef = useRef<ActiveView>("front");
   const [draggedSkillIndex, setDraggedSkillIndex] = useState<number | null>(null);
   const [draggedGearIndex, setDraggedGearIndex] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -455,6 +456,48 @@ export default function RolemasterCharacterSheetEngine() {
       document.body.style.touchAction = originalTouchAction;
     };
   }, [isAnyModalOpen]);
+
+  // Sync activeTabRef so hashchange handler never has a stale closure
+  useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+
+  // Hash-based navigation: back/forward works on all platforms incl. Android back button + iOS edge swipe
+  useEffect(() => {
+    const initial = window.location.hash.slice(1) as ActiveView;
+    if (TAB_OPTIONS.some((t) => t.value === initial)) {
+      setActiveTab(initial);
+    }
+
+    const handleHashChange = () => {
+      const hash = window.location.hash.slice(1) as ActiveView;
+      if (!TAB_OPTIONS.some((t) => t.value === hash)) return;
+      if (hash === activeTabRef.current) return;
+      transitionDir.current = "fade";
+      setTransitionKey((k) => k + 1);
+      setActiveTab(hash);
+    };
+
+    // Desktop: mouse side-buttons (button 3 = back, button 4 = forward)
+    const handleMouseUp = (e: MouseEvent) => {
+      if (e.button === 3) { e.preventDefault(); history.back(); }
+      else if (e.button === 4) { e.preventDefault(); history.forward(); }
+    };
+
+    window.addEventListener("hashchange", handleHashChange);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("hashchange", handleHashChange);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const navigateToTab = (tab: ActiveView, dir: "left" | "right" | "fade" = "fade") => {
+    transitionDir.current = dir;
+    setTransitionKey((k) => k + 1);
+    setActiveTab(tab);
+    if (TAB_OPTIONS.some((t) => t.value === (tab as string))) {
+      window.location.hash = tab as string;
+    }
+  };
 
   const selectedRace = useMemo(
     () => RACES.find((r) => r.name === sheet.details.race) ?? RACES[0],
@@ -1160,7 +1203,7 @@ export default function RolemasterCharacterSheetEngine() {
   };
 
   const closeLevelUpHelper = () => {
-    setActiveTab(lastNonHelperTab);
+    navigateToTab(lastNonHelperTab);
   };
 
   const addQuickSpend = (label: string, cost: number) => {
@@ -1263,9 +1306,7 @@ export default function RolemasterCharacterSheetEngine() {
     if (listEntry) {
       setExpandedSpellListIds((prev) => { const next = new Set(prev); next.add(listEntry.entry.id); return next; });
     }
-    transitionDir.current = "fade";
-    setTransitionKey((k) => k + 1);
-    setActiveTab("spells");
+    navigateToTab("spells");
   };
 
   const openUseActionModal = (label: string, name: string, bonus: number) => {
@@ -1460,16 +1501,14 @@ export default function RolemasterCharacterSheetEngine() {
     setExtraStatRolls([]);
     setTrainingPackageSpendName("");
     setTrainingPackageSpendCost(0);
-    setActiveTab("details");
+    navigateToTab("details");
   };
 
   const moveTab = (offset: -1 | 1) => {
     if (activeTab === "levelUp") return;
     const nextIndex = activeTabIndex + offset;
     if (nextIndex < 0 || nextIndex >= TAB_OPTIONS.length) return;
-    transitionDir.current = offset > 0 ? "left" : "right";
-    setTransitionKey((k) => k + 1);
-    setActiveTab(TAB_OPTIONS[nextIndex].value);
+    navigateToTab(TAB_OPTIONS[nextIndex].value, offset > 0 ? "left" : "right");
   };
 
   const isSwipeBlocked = (target: EventTarget | null) => {
@@ -1561,7 +1600,7 @@ export default function RolemasterCharacterSheetEngine() {
           </div>
         </div>
 
-        <Tabs defaultValue="front" value={activeTab} onValueChange={(next) => { transitionDir.current = "fade"; setTransitionKey((k) => k + 1); setActiveTab(next as ActiveView); }} className="min-w-0 space-y-4">
+        <Tabs defaultValue="front" value={activeTab} onValueChange={(next) => navigateToTab(next as ActiveView)} className="min-w-0 space-y-4">
           <TabsList id="section-tabs-strip" className="flex h-auto w-full min-w-0 gap-2 overflow-x-auto rounded-3xl bg-white/80 p-2 shadow-sm" data-no-tab-swipe="true">
             {TAB_OPTIONS.map((tab) => (
               <TabsTrigger key={tab.value} value={tab.value} data-tab-value={tab.value} className="whitespace-nowrap rounded-2xl">{tab.label}</TabsTrigger>
@@ -1585,7 +1624,7 @@ export default function RolemasterCharacterSheetEngine() {
                 <div className="mt-3 rounded-3xl border border-slate-200/80 bg-slate-50/90 p-2 shadow-inner">
                   <div className="grid w-full grid-cols-3 gap-1 sm:gap-2" data-no-tab-swipe="true">
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => { transitionDir.current = "fade"; setTransitionKey((k) => k + 1); setActiveTab("status"); }}>Hits</button>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => navigateToTab("status")}>Hits</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentHitsPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalHits}</span>
@@ -1596,7 +1635,7 @@ export default function RolemasterCharacterSheetEngine() {
                       </div>
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => { transitionDir.current = "fade"; setTransitionKey((k) => k + 1); setActiveTab("status"); }}>PP</button>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => navigateToTab("status")}>PP</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentPPPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalPP}</span>
@@ -1607,7 +1646,7 @@ export default function RolemasterCharacterSheetEngine() {
                       </div>
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => { transitionDir.current = "fade"; setTransitionKey((k) => k + 1); setActiveTab("status"); }}>EP</button>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => navigateToTab("status")}>EP</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentEPPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalEP}</span>
@@ -3087,10 +3126,6 @@ export default function RolemasterCharacterSheetEngine() {
               }
               return (
                 <div className="space-y-6">
-                  <div className="rounded-2xl border bg-white p-4 text-sm text-slate-600">
-                    Click a spell you can cast to open the Spell Casting Assistant.
-                  </div>
-
                   {groups.map(({ type, lists }) => (
                     <div key={type} className="space-y-3">
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{type} Lists</h3>
