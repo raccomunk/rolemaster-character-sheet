@@ -86,6 +86,7 @@ export type SkillCategory = {
   newRanks: number;
   progressionType: ProgressionType;
   customProgression?: RankProgression;
+  developmentPointBonus?: number;
   professionBonus: number;
   specialBonus: number;
 };

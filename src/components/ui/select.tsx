@@ -1,10 +1,5 @@
 import React from "react";
 
-type SelectItemData = {
-  value: string;
-  label: string;
-};
-
 type SelectProps = {
   value?: string;
   onValueChange?: (value: any) => void;
@@ -16,6 +11,11 @@ type SelectItemProps = {
   children: React.ReactNode;
 };
 
+type SelectGroupProps = {
+  label: string;
+  children?: React.ReactNode;
+};
+
 function textFromNode(node: React.ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(textFromNode).join(" ").trim();
@@ -23,35 +23,39 @@ function textFromNode(node: React.ReactNode): string {
   return "";
 }
 
-function collectItems(node: React.ReactNode, items: SelectItemData[]): void {
+function renderAsNativeOptions(node: React.ReactNode): React.ReactNode[] {
+  const result: React.ReactNode[] = [];
   React.Children.forEach(node, (child) => {
     if (!React.isValidElement(child)) return;
-    const elementType = child.type as any;
-    if (elementType?.displayName === "SelectItem") {
-      items.push({
-        value: String(child.props.value),
-        label: textFromNode(child.props.children) || String(child.props.value),
-      });
+    const et = child.type as any;
+    if (et?.displayName === "SelectItem") {
+      result.push(
+        <option key={child.props.value} value={child.props.value}>
+          {textFromNode(child.props.children)}
+        </option>
+      );
+    } else if (et?.displayName === "SelectGroup") {
+      const groupLabel = String((child.props as SelectGroupProps).label ?? "");
+      result.push(
+        <optgroup key={groupLabel} label={groupLabel}>
+          {renderAsNativeOptions(child.props.children)}
+        </optgroup>
+      );
+    } else if (et?.displayName !== "SelectLabel" && child.props?.children) {
+      result.push(...renderAsNativeOptions(child.props.children));
     }
-    if (child.props?.children) collectItems(child.props.children, items);
   });
+  return result;
 }
 
 export function Select({ value = "", onValueChange, children }: SelectProps) {
-  const items: SelectItemData[] = [];
-  collectItems(children, items);
-
   return (
     <select
       className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
       value={value}
       onChange={(e) => onValueChange?.(e.target.value)}
     >
-      {items.map((item) => (
-        <option key={item.value} value={item.value}>
-          {item.label}
-        </option>
-      ))}
+      {renderAsNativeOptions(children)}
     </select>
   );
 }
@@ -71,5 +75,14 @@ export function SelectContent({ children }: { children?: React.ReactNode }) {
 export function SelectItem(_props: SelectItemProps) {
   return null;
 }
-
 SelectItem.displayName = "SelectItem";
+
+export function SelectGroup(_props: SelectGroupProps) {
+  return null;
+}
+SelectGroup.displayName = "SelectGroup";
+
+export function SelectLabel(_props: { children?: React.ReactNode }) {
+  return null;
+}
+SelectLabel.displayName = "SelectLabel";

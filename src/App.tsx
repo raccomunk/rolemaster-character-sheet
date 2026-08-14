@@ -6,10 +6,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, Save, Download, Upload, Star, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Trash2, Save, Download, Upload, Star, ChevronDown, ChevronUp, CheckCircle2 } from "lucide-react";
 import { RACES_DATA } from "@/data/races";
 import { PROFESSIONS_DATA } from "@/data/professions";
 import { PROFESSION_CATEGORY_COSTS } from "@/data/professionCategoryCosts";
@@ -263,6 +263,148 @@ function SectionCard({ title, children, action }: { title: string; children: Rea
 
 type CharacterEntry = { id: string; sheet: CharacterSheet };
 
+// ─── Combat round helper types & constants ───────────────────────────────────
+
+type CombatPhaseKey = "snap" | "normal" | "deliberate" | "postDeliberate";
+type CombatAttackType = "fullMelee" | "pressMelee" | "reactMelee" | "missile";
+type CombatMovementPace = "walk" | "fastWalk" | "run" | "sprint" | "fastSprint" | "dash";
+
+type CombatPhaseState = {
+  actionId: string;
+  activityPct: number;
+  pace: CombatMovementPace;
+  attackType: CombatAttackType;
+  skillName: string;
+  baseOB: number;
+  parryOB: number;
+  diceResult: number;
+  diceBreakdown: string;
+  modFlank: boolean;
+  modRear: boolean;
+  modSurprise: boolean;
+  modAdvantage: number;
+  modCharging: boolean;
+  movementFt: number;
+  modStunned: boolean;
+  modDowned: boolean;
+  modProne: boolean;
+  modRange: number;
+  modArmorPenalty: number;
+  modOther: number;
+  resolved: boolean;
+  cancelled: boolean;
+  accumulatedActivity: number;
+};
+
+function makeCombatPhaseState(): CombatPhaseState {
+  return {
+    actionId: "none", activityPct: 0, pace: "walk",
+    attackType: "fullMelee", skillName: "", baseOB: 0,
+    parryOB: 0, diceResult: 0, diceBreakdown: "",
+    modFlank: false, modRear: false, modSurprise: false, modAdvantage: 0,
+    modCharging: false, movementFt: 0,
+    modStunned: false, modDowned: false, modProne: false,
+    modRange: 0, modArmorPenalty: 0, modOther: 0,
+    resolved: false, cancelled: false, accumulatedActivity: 0,
+  };
+}
+
+const COMBAT_PHASES: readonly { key: CombatPhaseKey; label: string; modifier: number }[] = [
+  { key: "snap", label: "Snap", modifier: -20 },
+  { key: "normal", label: "Normal", modifier: 0 },
+  { key: "deliberate", label: "Deliberate", modifier: 10 },
+  { key: "postDeliberate", label: "Post-Deliberate", modifier: 0 },
+];
+
+const COMBAT_MOVEMENT_PACES: readonly { key: CombatMovementPace; label: string; multiplier: number }[] = [
+  { key: "walk", label: "Walk", multiplier: 1 },
+  { key: "fastWalk", label: "Fast Walk", multiplier: 1.5 },
+  { key: "run", label: "Run", multiplier: 2 },
+  { key: "sprint", label: "Sprint", multiplier: 3 },
+  { key: "fastSprint", label: "Fast Sprint", multiplier: 4 },
+  { key: "dash", label: "Dash", multiplier: 5 },
+];
+
+type CombatActionDef = {
+  id: string;
+  label: string;
+  defaultActivity: number;
+  minActivity: number;
+  maxActivity: number;
+  variable: boolean;
+  isAttack: boolean;
+  isMovement: boolean;
+  attackType?: CombatAttackType;
+  attackMaxActivity?: number;
+  phase?: CombatPhaseKey;
+  group: string;
+  totalRequired?: number;
+};
+
+const COMBAT_ACTION_DEFS: CombatActionDef[] = [
+  { id: "none", label: "— No action —", defaultActivity: 0, minActivity: 0, maxActivity: 0, variable: false, isAttack: false, isMovement: false, group: "" },
+  // Attacks
+  { id: "fullMelee", label: "Full melee attack (+10 OB)", defaultActivity: 100, minActivity: 60, maxActivity: 100, variable: true, isAttack: true, attackType: "fullMelee", attackMaxActivity: 100, isMovement: false, group: "Attacks" },
+  { id: "pressMelee", label: "Press & melee attack", defaultActivity: 100, minActivity: 80, maxActivity: 100, variable: true, isAttack: true, attackType: "pressMelee", attackMaxActivity: 100, isMovement: false, group: "Attacks" },
+  { id: "reactMelee", label: "React & melee attack (–10 OB)", defaultActivity: 100, minActivity: 80, maxActivity: 100, variable: true, isAttack: true, attackType: "reactMelee", attackMaxActivity: 100, isMovement: false, group: "Attacks" },
+  { id: "missile", label: "Missile attack (30–60%)", defaultActivity: 50, minActivity: 30, maxActivity: 60, variable: true, isAttack: true, attackType: "missile", attackMaxActivity: 60, isMovement: false, group: "Attacks" },
+  { id: "parryMissile", label: "Parry a missile (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Attacks" },
+  // Movement (phase-specific)
+  { id: "movSnap", label: "Movement (1–20%)", defaultActivity: 10, minActivity: 1, maxActivity: 20, variable: true, isAttack: false, isMovement: true, phase: "snap", group: "Movement" },
+  { id: "movNormal", label: "Movement (1–50%)", defaultActivity: 25, minActivity: 1, maxActivity: 50, variable: true, isAttack: false, isMovement: true, phase: "normal", group: "Movement" },
+  { id: "movDelib", label: "Movement (1–80%)", defaultActivity: 40, minActivity: 1, maxActivity: 80, variable: true, isAttack: false, isMovement: true, phase: "deliberate", group: "Movement" },
+  { id: "movPost", label: "Movement (any%)", defaultActivity: 50, minActivity: 1, maxActivity: 100, variable: true, isAttack: false, isMovement: true, phase: "postDeliberate", group: "Movement" },
+  // Spells
+  { id: "prepSpell", label: "Prepare a spell (90%)", defaultActivity: 90, minActivity: 90, maxActivity: 90, variable: false, isAttack: false, isMovement: false, group: "Spells" },
+  { id: "castNonInstant", label: "Cast — non-instantaneous (75%)", defaultActivity: 75, minActivity: 75, maxActivity: 75, variable: false, isAttack: false, isMovement: false, group: "Spells" },
+  { id: "castInstant", label: "Cast — instantaneous (10%)", defaultActivity: 10, minActivity: 10, maxActivity: 10, variable: false, isAttack: false, isMovement: false, group: "Spells" },
+  { id: "concentration", label: "Concentration (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Spells" },
+  // Maneuvers
+  { id: "movingManeuver", label: "Moving maneuver (1–100%)", defaultActivity: 50, minActivity: 1, maxActivity: 100, variable: true, isAttack: false, isMovement: false, group: "Maneuvers" },
+  { id: "staticManeuver", label: "Static maneuver (1–100%)", defaultActivity: 50, minActivity: 1, maxActivity: 100, variable: true, isAttack: false, isMovement: false, group: "Maneuvers" },
+  { id: "awarenessManeuver", label: "Awareness maneuver (10%)", defaultActivity: 10, minActivity: 10, maxActivity: 10, variable: false, isAttack: false, isMovement: false, group: "Maneuvers" },
+  { id: "disengage", label: "Disengage from melee (25%)", defaultActivity: 25, minActivity: 25, maxActivity: 25, variable: false, isAttack: false, isMovement: false, group: "Maneuvers" },
+  { id: "hiding", label: "Hiding (20%)", defaultActivity: 20, minActivity: 20, maxActivity: 20, variable: false, isAttack: false, isMovement: false, group: "Maneuvers" },
+  { id: "stalking", label: "Stalking (50–100%)", defaultActivity: 75, minActivity: 50, maxActivity: 100, variable: true, isAttack: false, isMovement: false, group: "Maneuvers" },
+  { id: "climbing", label: "Climbing (60–100%)", defaultActivity: 80, minActivity: 60, maxActivity: 100, variable: true, isAttack: false, isMovement: false, group: "Maneuvers" },
+  { id: "controlMount", label: "Control a mount (10–100%)", defaultActivity: 50, minActivity: 10, maxActivity: 100, variable: true, isAttack: false, isMovement: false, group: "Maneuvers" },
+  // Observation
+  { id: "obsRapid", label: "Rapid Observation (30%, –40 mod)", defaultActivity: 30, minActivity: 30, maxActivity: 30, variable: false, isAttack: false, isMovement: false, group: "Observation" },
+  { id: "obsHalf", label: "Half Observation (50%, –20 mod)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Observation" },
+  { id: "obsFull", label: "Full Observation (70%)", defaultActivity: 70, minActivity: 70, maxActivity: 70, variable: false, isAttack: false, isMovement: false, group: "Observation" },
+  // Gear
+  { id: "shiftWeapon", label: "Shift a weapon (10%)", defaultActivity: 10, minActivity: 10, maxActivity: 10, variable: false, isAttack: false, isMovement: false, group: "Gear" },
+  { id: "drawWeapon", label: "Draw a weapon (20%)", defaultActivity: 20, minActivity: 20, maxActivity: 20, variable: false, isAttack: false, isMovement: false, group: "Gear" },
+  { id: "changeWeapon", label: "Change weapons (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Gear" },
+  { id: "pickUp", label: "Pick something up (30%)", defaultActivity: 30, minActivity: 30, maxActivity: 30, variable: false, isAttack: false, isMovement: false, group: "Gear" },
+  { id: "drop", label: "Drop something (0%)", defaultActivity: 0, minActivity: 0, maxActivity: 0, variable: false, isAttack: false, isMovement: false, group: "Gear" },
+  // Posture
+  { id: "standSeated", label: "Stand from seated (10%)", defaultActivity: 10, minActivity: 10, maxActivity: 10, variable: false, isAttack: false, isMovement: false, group: "Posture" },
+  { id: "standKnees", label: "Stand from knees/crouch (20%)", defaultActivity: 20, minActivity: 20, maxActivity: 20, variable: false, isAttack: false, isMovement: false, group: "Posture" },
+  { id: "kneelProne", label: "Kneel from prone (30%)", defaultActivity: 30, minActivity: 30, maxActivity: 30, variable: false, isAttack: false, isMovement: false, group: "Posture" },
+  { id: "standProne", label: "Stand from prone (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Posture" },
+  { id: "dropRapid", label: "Rapid drop to ground (10%)", defaultActivity: 10, minActivity: 10, maxActivity: 10, variable: false, isAttack: false, isMovement: false, group: "Posture" },
+  { id: "dropCareful", label: "Careful drop to ground (20%)", defaultActivity: 20, minActivity: 20, maxActivity: 20, variable: false, isAttack: false, isMovement: false, group: "Posture" },
+  // Mounted
+  { id: "dismountRapid", label: "Rapid dismount (20%)", defaultActivity: 20, minActivity: 20, maxActivity: 20, variable: false, isAttack: false, isMovement: false, group: "Mounted" },
+  { id: "dismountCareful", label: "Careful dismount (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Mounted" },
+  { id: "mount", label: "Mount an animal (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Mounted" },
+  // Other
+  { id: "swimRelaxed", label: "Relaxed swim (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Other" },
+  { id: "swimHard", label: "Hard swim (90%)", defaultActivity: 90, minActivity: 90, maxActivity: 90, variable: false, isAttack: false, isMovement: false, group: "Other" },
+  // Reloads
+  { id: "reloadSling", label: "Sling (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Reloads" },
+  { id: "reloadShortBow", label: "Short bow (50%)", defaultActivity: 50, minActivity: 50, maxActivity: 50, variable: false, isAttack: false, isMovement: false, group: "Reloads" },
+  { id: "reloadCompBow", label: "Composite bow (60%)", defaultActivity: 60, minActivity: 60, maxActivity: 60, variable: false, isAttack: false, isMovement: false, group: "Reloads" },
+  { id: "reloadLongBow", label: "Long bow (70%)", defaultActivity: 70, minActivity: 70, maxActivity: 70, variable: false, isAttack: false, isMovement: false, group: "Reloads" },
+  { id: "reloadLightXbow", label: "Light crossbow (160% total)", defaultActivity: 50, minActivity: 1, maxActivity: 100, variable: true, isAttack: false, isMovement: false, group: "Reloads", totalRequired: 160 },
+  { id: "reloadHeavyXbow", label: "Heavy crossbow (220% total)", defaultActivity: 50, minActivity: 1, maxActivity: 100, variable: true, isAttack: false, isMovement: false, group: "Reloads", totalRequired: 220 },
+];
+
+const MISSILE_WEAPON_CATS = ["Weapon • Missile", "Weapon • Missile Artillery", "Weapon • Thrown"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const TAB_OPTIONS = [
   { value: "front", label: "Main" },
   { value: "details", label: "Details" },
@@ -320,6 +462,17 @@ export default function RolemasterCharacterSheetEngine() {
   const [castRollBreakdown, setCastRollBreakdown] = useState("");
   const [lastCastSummary, setLastCastSummary] = useState("");
   const [selectedUseAction, setSelectedUseAction] = useState<{ label: string; name: string; bonus: number } | null>(null);
+  const [poolEditModal, setPoolEditModal] = useState<"hits" | "pp" | "ep" | null>(null);
+  const [combatInitDie1, setCombatInitDie1] = useState(0);
+  const [combatInitDie2, setCombatInitDie2] = useState(0);
+  const [combatInitBreakdown, setCombatInitBreakdown] = useState("");
+  const [combatPhases, setCombatPhases] = useState<Record<CombatPhaseKey, CombatPhaseState>>(() => ({
+    snap: makeCombatPhaseState(),
+    normal: makeCombatPhaseState(),
+    deliberate: makeCombatPhaseState(),
+    postDeliberate: makeCombatPhaseState(),
+  }));
+  const [combatCancelledInfo, setCombatCancelledInfo] = useState<{ total: number; high: boolean } | null>(null);
   const [useActionDiceResult, setUseActionDiceResult] = useState(0);
   const [useActionRollBreakdown, setUseActionRollBreakdown] = useState("");
   const [useActionExtraModifier, setUseActionExtraModifier] = useState(0);
@@ -412,6 +565,17 @@ export default function RolemasterCharacterSheetEngine() {
     setUseActionDiceResult(0);
     setUseActionRollBreakdown("");
     setUseActionExtraModifier(0);
+    setPoolEditModal(null);
+    setCombatInitDie1(0);
+    setCombatInitDie2(0);
+    setCombatInitBreakdown("");
+    setCombatCancelledInfo(null);
+    setCombatPhases({
+      snap: makeCombatPhaseState(),
+      normal: makeCombatPhaseState(),
+      deliberate: makeCombatPhaseState(),
+      postDeliberate: makeCombatPhaseState(),
+    });
   }, [activeCharacter.id]);
 
   useEffect(() => {
@@ -443,7 +607,7 @@ export default function RolemasterCharacterSheetEngine() {
     localStorage.setItem("rolemaster-party", JSON.stringify(characters));
   }, [characters, loaded]);
 
-  const isAnyModalOpen = isCastAssistantOpen || Boolean(editingSkillId) || Boolean(editingGearItemId) || Boolean(selectedUseAction);
+  const isAnyModalOpen = isCastAssistantOpen || Boolean(editingSkillId) || Boolean(editingGearItemId) || Boolean(selectedUseAction) || Boolean(poolEditModal);
 
   useEffect(() => {
     if (!isAnyModalOpen) return;
@@ -514,6 +678,11 @@ export default function RolemasterCharacterSheetEngine() {
     [sheet.details.profession]
   );
 
+  const primaryRealm = useMemo(
+    () => firstMagicalRealm(sheet.details.realmOfPower as Realm[]),
+    [sheet.details.realmOfPower]
+  );
+
   const professionCategoryBonuses = useMemo(() => buildCategoryBonuses(selectedProfession.rules), [selectedProfession]);
 
   useEffect(() => {
@@ -561,7 +730,7 @@ export default function RolemasterCharacterSheetEngine() {
   }, [sheet.stats]);
 
   const armorQuicknessBonus = statTotals["Quickness"].total * 3;
-  const totalNormalDB = armorQuicknessBonus + sheet.armor.armorQuicknessPenalty + sheet.armor.shieldBonus + sheet.armor.magicBonus + sheet.armor.specialBonus;
+  const totalNormalDB = Math.max(0, armorQuicknessBonus + sheet.armor.armorQuicknessPenalty + sheet.armor.shieldBonus + sheet.armor.magicBonus + sheet.armor.specialBonus);
 
   const resistanceRolls = useMemo(() => {
     return {
@@ -595,10 +764,11 @@ export default function RolemasterCharacterSheetEngine() {
   const categoryDerived = useMemo(() => {
     const primaryRealm = firstMagicalRealm(sheet.details.realmOfPower as Realm[]);
     return sheet.skillCategories.map((cat) => {
+      const devBonus = cat.developmentPointBonus ?? 0;
       const progression = cat.progressionType === "bodyDevelopment"
-        ? selectedRace.bodyDevelopmentProgression
+        ? (devBonus ? [selectedRace.bodyDevelopmentProgression[0], ...selectedRace.bodyDevelopmentProgression.slice(1).map((v) => v + devBonus)] as [number,number,number,number,number] : selectedRace.bodyDevelopmentProgression)
         : cat.progressionType === "powerPointDevelopment"
-          ? selectedRace.ppDevelopmentProgressionByRealm[primaryRealm]
+          ? (devBonus ? [selectedRace.ppDevelopmentProgressionByRealm[primaryRealm][0], ...selectedRace.ppDevelopmentProgressionByRealm[primaryRealm].slice(1).map((v) => v + devBonus)] as [number,number,number,number,number] : selectedRace.ppDevelopmentProgressionByRealm[primaryRealm])
           : cat.progressionType === "combined" || cat.progressionType === "limited" || cat.progressionType === "special"
             ? ZERO_PROGRESSION
             : cat.customProgression ?? DEFAULT_CATEGORY_PROGRESSION;
@@ -644,10 +814,11 @@ export default function RolemasterCharacterSheetEngine() {
     return sheet.skills.map((skill) => {
       const category = categoryMap.get(skill.categoryId);
       const progressionType = category?.progressionType ?? "standard";
+      const devBonus = category?.developmentPointBonus ?? 0;
       const progression = progressionType === "bodyDevelopment"
-        ? selectedRace.bodyDevelopmentProgression
+        ? (devBonus ? [selectedRace.bodyDevelopmentProgression[0], ...selectedRace.bodyDevelopmentProgression.slice(1).map((v) => v + devBonus)] as [number,number,number,number,number] : selectedRace.bodyDevelopmentProgression)
         : progressionType === "powerPointDevelopment"
-          ? selectedRace.ppDevelopmentProgressionByRealm[primaryRealm]
+          ? (devBonus ? [selectedRace.ppDevelopmentProgressionByRealm[primaryRealm][0], ...selectedRace.ppDevelopmentProgressionByRealm[primaryRealm].slice(1).map((v) => v + devBonus)] as [number,number,number,number,number] : selectedRace.ppDevelopmentProgressionByRealm[primaryRealm])
           : DEFAULT_SKILL_PROGRESSIONS[progressionType] ?? DEFAULT_SKILL_PROGRESSIONS.standard;
       const rank = rankValue(skill.ranks, progression);
       const categoryTotal = category?.total ?? 0;
@@ -1322,6 +1493,45 @@ export default function RolemasterCharacterSheetEngine() {
     setUseActionRollBreakdown(`${result.mode}: ${result.rolls.join(", ")}`);
   };
 
+  const updateCombatPhase = (key: CombatPhaseKey, update: Partial<CombatPhaseState>) => {
+    setCombatPhases((prev) => ({ ...prev, [key]: { ...prev[key], ...update } }));
+  };
+
+  const rollCombatInit = () => {
+    const d1 = Math.floor(Math.random() * 10) + 1;
+    const d2 = Math.floor(Math.random() * 10) + 1;
+    setCombatInitDie1(d1);
+    setCombatInitDie2(d2);
+    setCombatInitBreakdown(`Rolled: ${d1} + ${d2}`);
+  };
+
+  const rollCombatAttack = (key: CombatPhaseKey) => {
+    const result = rollOpenEndedD100();
+    updateCombatPhase(key, { diceResult: result.total, diceBreakdown: `${result.mode}: ${result.rolls.join(", ")}` });
+  };
+
+  const resetCombatRound = () => {
+    setCombatInitDie1(0);
+    setCombatInitDie2(0);
+    setCombatInitBreakdown("");
+    setCombatCancelledInfo(null);
+    setCombatPhases((prev) => {
+      const nextPhase = (key: CombatPhaseKey): CombatPhaseState => {
+        const ps = prev[key];
+        if (ps.cancelled) return makeCombatPhaseState();
+        const def = COMBAT_ACTION_DEFS.find((a) => a.id === ps.actionId);
+        if (def?.totalRequired !== undefined) {
+          const newAccumulated = ps.accumulatedActivity + ps.activityPct;
+          if (newAccumulated < def.totalRequired) {
+            return { ...makeCombatPhaseState(), actionId: ps.actionId, activityPct: ps.activityPct, accumulatedActivity: newAccumulated, attackType: ps.attackType };
+          }
+        }
+        return makeCombatPhaseState();
+      };
+      return { snap: nextPhase("snap"), normal: nextPhase("normal"), deliberate: nextPhase("deliberate"), postDeliberate: nextPhase("postDeliberate") };
+    });
+  };
+
   const openSpellCastingAssistant = (listId: string, spellId: string) => {
     setSelectedCastListId(listId);
     setSelectedCastSpellId(spellId);
@@ -1513,7 +1723,7 @@ export default function RolemasterCharacterSheetEngine() {
 
   const isSwipeBlocked = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return false;
-    return Boolean(target.closest("[data-no-tab-swipe='true']"));
+    return Boolean(target.closest("[data-no-tab-swipe='true']") || target.closest("textarea") || target.closest("[data-scroll-container='true']"));
   };
 
   const handleTabSwipeStart = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -1624,7 +1834,7 @@ export default function RolemasterCharacterSheetEngine() {
                 <div className="mt-3 rounded-3xl border border-slate-200/80 bg-slate-50/90 p-2 shadow-inner">
                   <div className="grid w-full grid-cols-3 gap-1 sm:gap-2" data-no-tab-swipe="true">
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => navigateToTab("status")}>Hits</button>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => setPoolEditModal("hits")}>Hits</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentHitsPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalHits}</span>
@@ -1635,7 +1845,7 @@ export default function RolemasterCharacterSheetEngine() {
                       </div>
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => navigateToTab("status")}>PP</button>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => setPoolEditModal("pp")}>PP</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentPPPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalPP}</span>
@@ -1646,7 +1856,7 @@ export default function RolemasterCharacterSheetEngine() {
                       </div>
                     </div>
                     <div className="flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm sm:flex-row sm:gap-2 sm:px-3 sm:py-2">
-                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => navigateToTab("status")}>EP</button>
+                      <button type="button" className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-800 sm:text-xs" onClick={() => setPoolEditModal("ep")}>EP</button>
                       <div className="min-w-0 text-center sm:flex-1">
                         <span className="text-xs font-medium tabular-nums text-slate-900 sm:text-sm">{currentEPPool}</span>
                         <span className="text-[9px] text-slate-400 sm:text-[10px]">/{totalEP}</span>
@@ -1678,19 +1888,15 @@ export default function RolemasterCharacterSheetEngine() {
                   : <div className="overflow-y-auto md:max-h-[calc(100vh-340px)]">
                       <div className="space-y-2 md:hidden">
                         {commonlyUsedSkills.map((skill) => (
-                          <div key={skill.id} className="rounded-2xl border px-2 py-2 text-xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="truncate font-medium leading-tight text-slate-900">{skill.name}</div>
-                                {skill.category && <div className="truncate text-[10px] leading-tight text-slate-400">{skill.category.name}</div>}
-                              </div>
-                              {skill.category?.name.startsWith("Spells •")
-                                ? <Button type="button" variant="outline" className="h-6 shrink-0 rounded-xl px-2 text-[10px]" onClick={() => openSpellList(skill.name)}>Spell List</Button>
-                                : <Button type="button" variant="outline" className="h-6 shrink-0 rounded-xl px-2 text-[10px]" onClick={() => openUseActionModal("Use Skill", skill.name, skill.total)}>Use Skill</Button>
-                              }
-                            </div>
-                            <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-slate-600">
-                              <span className="truncate">Ranks {skill.ranks} · Bonus {skill.total >= 0 ? "+" : ""}{skill.total}</span>
+                          <div
+                            key={skill.id}
+                            className="cursor-pointer rounded-2xl border px-2 py-2 text-xs active:bg-slate-50"
+                            onClick={() => skill.category?.name.startsWith("Spells •") ? openSpellList(skill.name) : openUseActionModal("Use Skill", skill.name, skill.total)}
+                          >
+                            <div className="truncate font-medium leading-tight text-slate-900">{skill.name}</div>
+                            {skill.category && <div className="truncate text-[10px] leading-tight text-slate-400">{skill.category.name}</div>}
+                            <div className="mt-1 text-[11px] text-slate-600">
+                              Ranks {skill.ranks} · Bonus {skill.total >= 0 ? "+" : ""}{skill.total}
                             </div>
                           </div>
                         ))}
@@ -1701,24 +1907,21 @@ export default function RolemasterCharacterSheetEngine() {
                             <th className="pb-2 font-normal">Skill</th>
                             <th className="pb-2 font-normal text-right pr-4">Ranks</th>
                             <th className="pb-2 font-normal text-right">Bonus</th>
-                            <th className="pb-2 font-normal text-right">Use</th>
                           </tr>
                         </thead>
                         <tbody>
                           {commonlyUsedSkills.map((skill) => (
-                            <tr key={skill.id} className="border-b last:border-0">
+                            <tr
+                              key={skill.id}
+                              className="cursor-pointer border-b last:border-0 hover:bg-slate-50"
+                              onClick={() => skill.category?.name.startsWith("Spells •") ? openSpellList(skill.name) : openUseActionModal("Use Skill", skill.name, skill.total)}
+                            >
                               <td className="py-1 pr-4">
                                 <div className="font-medium">{skill.name}</div>
                                 {skill.category && <div className="text-xs text-slate-400">{skill.category.name}</div>}
                               </td>
                               <td className="py-1 text-right pr-4 tabular-nums">{skill.ranks}</td>
                               <td className="py-1 text-right tabular-nums font-semibold">{skill.total >= 0 ? "+" : ""}{skill.total}</td>
-                              <td className="py-1 text-right">
-                                {skill.category?.name.startsWith("Spells •")
-                                  ? <Button type="button" variant="outline" className="h-7 rounded-xl px-2 text-xs" onClick={() => openSpellList(skill.name)}>List</Button>
-                                  : <Button type="button" variant="outline" className="h-7 rounded-xl px-2 text-xs" onClick={() => openUseActionModal("Use Skill", skill.name, skill.total)}>Use</Button>
-                                }
-                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1734,14 +1937,13 @@ export default function RolemasterCharacterSheetEngine() {
                   : <div className="overflow-y-auto md:max-h-[calc(100vh-340px)]">
                       <div className="space-y-2 md:hidden">
                         {commonlyUsedAttacks.map((skill) => (
-                          <div key={skill.id} className="rounded-2xl border px-2 py-2 text-xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="truncate font-medium leading-tight text-slate-900">{skill.name}</div>
-                                {skill.category && <div className="truncate text-[10px] leading-tight text-slate-400">{skill.category.name}</div>}
-                              </div>
-                              <Button type="button" variant="outline" className="h-6 shrink-0 rounded-xl px-2 text-[10px]" onClick={() => openUseActionModal("Use Attack", skill.name, skill.total)}>Use Attack</Button>
-                            </div>
+                          <div
+                            key={skill.id}
+                            className="cursor-pointer rounded-2xl border px-2 py-2 text-xs active:bg-slate-50"
+                            onClick={() => openUseActionModal("Use Attack", skill.name, skill.total)}
+                          >
+                            <div className="truncate font-medium leading-tight text-slate-900">{skill.name}</div>
+                            {skill.category && <div className="truncate text-[10px] leading-tight text-slate-400">{skill.category.name}</div>}
                             <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 text-[11px] text-slate-600">
                               <span>Ranks {skill.ranks}</span>
                               <span className="text-slate-300">·</span>
@@ -1762,12 +1964,15 @@ export default function RolemasterCharacterSheetEngine() {
                             <th className="pb-2 font-normal text-right pr-4">Bonus</th>
                             <th className="pb-2 font-normal text-right pr-4">Fumble</th>
                             <th className="pb-2 font-normal text-right">Range</th>
-                            <th className="pb-2 font-normal text-right">Use</th>
                           </tr>
                         </thead>
                         <tbody>
                           {commonlyUsedAttacks.map((skill) => (
-                            <tr key={skill.id} className="border-b last:border-0">
+                            <tr
+                              key={skill.id}
+                              className="cursor-pointer border-b last:border-0 hover:bg-slate-50"
+                              onClick={() => openUseActionModal("Use Attack", skill.name, skill.total)}
+                            >
                               <td className="py-1.5 pr-4">
                                 <div className="font-medium">{skill.name}</div>
                                 {skill.category && <div className="text-xs text-slate-400">{skill.category.name}</div>}
@@ -1776,9 +1981,6 @@ export default function RolemasterCharacterSheetEngine() {
                               <td className="py-1.5 text-right pr-4 tabular-nums font-semibold">{skill.total >= 0 ? "+" : ""}{skill.total}</td>
                               <td className="py-1.5 text-right pr-4">{skill.fumble || "—"}</td>
                               <td className="py-1.5 text-right">{skill.rangeModifications || "—"}</td>
-                              <td className="py-1.5 text-right">
-                                <Button type="button" variant="outline" className="h-8 rounded-xl px-2 text-xs" onClick={() => openUseActionModal("Use Attack", skill.name, skill.total)}>Use Attack</Button>
-                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -2636,75 +2838,678 @@ export default function RolemasterCharacterSheetEngine() {
           </TabsContent>
 
           <TabsContent value="combat" className="space-y-4">
-            <div className="grid gap-4 xl:grid-cols-2">
-              <SectionCard title="Armor">
-                <div className="grid gap-3 md:grid-cols-2">
-                  {[
-                    ["armorType", "Armor Type"], ["weightPenalty", "Weight Penalty"], ["baseMovementRate", "Base Movement Rate"], ["movingManeuverPenalty", "Moving Maneuver Penalty"], ["missilePenalty", "Missile Penalty"], ["armorQuicknessPenalty", "Armor Quickness Penalty"], ["shieldBonus", "Shield Bonus"], ["magicBonus", "Magic Bonus"], ["specialBonus", "Special"],
-                  ].map(([key, label]) => (
-                    <div key={key}>
-                      <label className="mb-1 block text-sm">{label}</label>
-                      <NumberInput value={(sheet.armor as any)[key]} onChange={(v) => updateSheet((prev) => ({ ...prev, armor: { ...prev.armor, [key]: v } }))} />
-                    </div>
-                  ))}
-                  <div>
-                    <label className="mb-1 block text-sm">Quickness Bonus</label>
-                    <Input value={armorQuicknessBonus} readOnly />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm">Total Normal DB</label>
-                    <Input value={totalNormalDB} readOnly />
-                  </div>
-                </div>
-              </SectionCard>
+            {(() => {
+              const quiBonus = statTotals["Quickness"].total;
+              const initTotal = combatInitDie1 + combatInitDie2 + quiBonus;
+              const totalActivity = Object.values(combatPhases).reduce((sum, ps) => sum + (ps.cancelled ? 0 : ps.activityPct), 0);
+              const activityOver = totalActivity > 100;
+              const missileAttacks = commonlyUsedAttacks.filter((s) => MISSILE_WEAPON_CATS.includes(s.category?.name ?? ""));
+              const meleeAttacks = commonlyUsedAttacks.filter((s) => !MISSILE_WEAPON_CATS.includes(s.category?.name ?? ""));
 
-              <SectionCard title="Resistance Rolls">
-                <div className="space-y-3">
-                  {(["Channeling", "Essence", "Mentalism", "Poison", "Disease", "Fear"] as ResistanceName[]).map((rr) => (
-                    <div key={rr} className="grid items-center gap-2 rounded-2xl border p-3 md:grid-cols-4">
-                      <div className="font-medium">{rr}</div>
-                      <div>Race: {resistanceRolls[rr].raceBonus}</div>
-                      <div>Stat: {resistanceRolls[rr].statBonus}</div>
-                      <div className="font-semibold">Total: {resistanceRolls[rr].raceBonus + resistanceRolls[rr].statBonus}</div>
-                    </div>
-                  ))}
-                </div>
-              </SectionCard>
+              const computeAttackTotals = (ps: CombatPhaseState, phaseMod: number, actionDef: CombatActionDef, extraMod = 0) => {
+                const isMissile = ps.attackType === "missile";
+                const attackTypeOBMod = ps.attackType === "fullMelee" ? 10 : ps.attackType === "reactMelee" ? -10 : 0;
+                const attackMaxActivity = actionDef.attackMaxActivity ?? 100;
+                const activityPenalty = -(attackMaxActivity - Math.min(ps.activityPct, attackMaxActivity));
+                const flankMod = !isMissile && ps.modFlank ? 15 : 0;
+                const rearMod = !isMissile && ps.modRear ? 20 : 0;
+                const surpriseMod = !isMissile && ps.modSurprise ? 20 : 0;
+                const advantageMod = !isMissile ? ps.modAdvantage : 0;
+                const stunnedMod = ps.modStunned ? 20 : 0;
+                const downedMod = ps.modDowned ? 30 : 0;
+                const proneMod = ps.modProne ? 50 : 0;
+                const chargingMod = !isMissile && ps.modCharging && ps.movementFt >= 10 ? Math.floor(ps.movementFt / 10) : 0;
+                const rangeMod = isMissile ? ps.modRange : 0;
+                const armorMod = isMissile ? ps.modArmorPenalty : 0;
+                const hp = healthPenalty(healthPercent);
+                const hitsMod = hp === -999 ? -100 : hp;
+                const epMod = exhaustionPenalty(exhaustionPercent);
+                const parryOB = Math.min(ps.parryOB, Math.max(0, ps.baseOB));
+                const obForAttack = ps.baseOB - parryOB;
+                const rows: { label: string; value: number }[] = [
+                  { label: "OB (after parry)", value: obForAttack },
+                  { label: "Attack type bonus", value: attackTypeOBMod },
+                  { label: "Phase modifier", value: phaseMod },
+                  { label: "Activity penalty", value: activityPenalty },
+                ];
+                if (flankMod) rows.push({ label: "Flank attack", value: flankMod });
+                if (rearMod) rows.push({ label: "Rear attack", value: rearMod });
+                if (surpriseMod) rows.push({ label: "Surprise attack", value: surpriseMod });
+                if (advantageMod) rows.push({ label: "Advantageous position", value: advantageMod });
+                if (stunnedMod) rows.push({ label: "Target stunned", value: stunnedMod });
+                if (downedMod) rows.push({ label: "Target downed", value: downedMod });
+                if (proneMod) rows.push({ label: "Target prone", value: proneMod });
+                if (chargingMod) rows.push({ label: `Charging (${ps.movementFt}')`, value: chargingMod });
+                if (rangeMod) rows.push({ label: "Range modifier", value: rangeMod });
+                if (armorMod) rows.push({ label: "Armor penalty", value: armorMod });
+                if (hitsMod !== 0) rows.push({ label: "Hits taken", value: hitsMod });
+                if (epMod !== 0) rows.push({ label: "Exhaustion", value: epMod });
+                if (extraMod !== 0) rows.push({ label: "Cancellation penalty", value: extraMod });
+                if (ps.modOther !== 0) rows.push({ label: "Other", value: ps.modOther });
+                const totalMod = rows.slice(1).reduce((s, r) => s + r.value, 0);
+                const total = ps.diceResult + obForAttack + totalMod;
+                return { rows, totalMod, total, parryOB, obForAttack, activityPenalty };
+              };
 
-              <SectionCard title="Movement Rates" action={<Badge>{sheet.armor.baseMovementRate} base</Badge>}>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="py-2">Pace</th>
-                        <th>Multiplier</th>
-                        <th>Movement Rate</th>
-                        <th>Exhaustion</th>
-                        <th>Difficulty</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[
-                        ["Walk", 1, "1/60 per round", "None"],
-                        ["Fast Walk", 1.5, "1/30 per round", "None"],
-                        ["Run", 2, "1/12 per round", "None"],
-                        ["Sprint", 3, "2 per round", "Easy"],
-                        ["Fast Sprint", 4, "6 per round", "Light"],
-                        ["Dash", 5, "50 per round", "Medium"],
-                      ].map(([pace, multiplier, exhaustion, difficulty]) => (
-                        <tr key={String(pace)} className="border-b">
-                          <td className="py-2 font-medium">{pace}</td>
-                          <td>x{multiplier}</td>
-                          <td>{Math.round(sheet.armor.baseMovementRate * Number(multiplier))}</td>
-                          <td>{String(exhaustion)}</td>
-                          <td>{String(difficulty)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </SectionCard>
-            </div>
+              return (
+                <>
+                  {/* ── Initiative ─────────────────────────────────── */}
+                  <SectionCard title="Initiative" action={
+                    <div className="flex items-center gap-2">
+                      <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={rollCombatInit}>Roll 2d10</Button>
+                      <Button type="button" variant="ghost" className="h-8 rounded-xl px-3 text-xs text-slate-500" onClick={resetCombatRound}>New Round</Button>
+                    </div>
+                  }>
+                    <div className="flex flex-wrap items-end gap-4">
+                      <div>
+                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Die 1</label>
+                        <NumberInput value={combatInitDie1} min={1} max={10} onChange={(v) => { setCombatInitDie1(v); setCombatInitBreakdown(""); }} className="w-20" />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Die 2</label>
+                        <NumberInput value={combatInitDie2} min={1} max={10} onChange={(v) => { setCombatInitDie2(v); setCombatInitBreakdown(""); }} className="w-20" />
+                      </div>
+                      <div className="text-sm text-slate-500">
+                        Quickness bonus: <span className="font-medium text-slate-800">{signed(quiBonus)}</span>
+                      </div>
+                      {combatInitBreakdown && <div className="text-xs text-slate-400">{combatInitBreakdown}</div>}
+                      {(combatInitDie1 + combatInitDie2) > 0 && (
+                        <div className="rounded-2xl bg-slate-900 px-5 py-2 text-white">
+                          <div className="text-[10px] uppercase tracking-widest text-slate-400">Initiative</div>
+                          <div className="text-2xl font-bold tabular-nums">{initTotal}</div>
+                        </div>
+                      )}
+                    </div>
+                  </SectionCard>
+
+                  {/* ── Activity Budget ─────────────────────────────── */}
+                  <div className="rounded-2xl border bg-white px-4 py-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-sm font-medium text-slate-700">Activity Budget</span>
+                      <span className={`text-sm font-semibold tabular-nums ${activityOver ? "text-red-600" : "text-slate-700"}`}>{totalActivity}% / 100%</span>
+                    </div>
+                    <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-full transition-all ${activityOver ? "bg-red-500" : totalActivity >= 80 ? "bg-amber-400" : "bg-emerald-500"}`}
+                        style={{ width: `${Math.min(totalActivity, 100)}%` }}
+                      />
+                    </div>
+                    {activityOver && <div className="mt-1 text-xs text-red-600">Over budget by {totalActivity - 100}%</div>}
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                      {COMBAT_PHASES.map((ph) => {
+                        const ps = combatPhases[ph.key];
+                        if (ps.actionId === "none" && !ps.cancelled) return null;
+                        if (ps.cancelled) {
+                          const def = COMBAT_ACTION_DEFS.find((a) => a.id === ps.actionId);
+                          return (
+                            <span key={ph.key} className="line-through text-rose-400">
+                              <span className="font-medium">{ph.label}:</span> {ps.activityPct}% — {def?.label ?? ps.actionId}
+                            </span>
+                          );
+                        }
+                        const def = COMBAT_ACTION_DEFS.find((a) => a.id === ps.actionId);
+                        return (
+                          <span key={ph.key}>
+                            <span className="font-medium text-slate-700">{ph.label}:</span> {ps.activityPct}% — {def?.label ?? ps.actionId}
+                            {ps.resolved && <span className="ml-1 text-emerald-600">✓</span>}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* ── Phase Cards ─────────────────────────────────── */}
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {COMBAT_PHASES.map((ph) => {
+                      const ps = combatPhases[ph.key];
+                      const actionDef = COMBAT_ACTION_DEFS.find((a) => a.id === ps.actionId) ?? COMBAT_ACTION_DEFS[0];
+                      const isMissile = actionDef.attackType === "missile";
+                      const movPaceDef = COMBAT_MOVEMENT_PACES.find((p) => p.key === ps.pace) ?? COMBAT_MOVEMENT_PACES[0];
+                      const movDistance = actionDef.isMovement && ps.activityPct > 0
+                        ? Math.round(sheet.armor.baseMovementRate * movPaceDef.multiplier * ps.activityPct / 100) : 0;
+                      const isReplacementMelee = combatCancelledInfo !== null && ph.key === "deliberate" && actionDef.id === "fullMelee";
+                      const attackTotals = actionDef.isAttack ? computeAttackTotals(ps, ph.modifier, actionDef, isReplacementMelee ? -40 : 0) : null;
+
+                      // Actions available for this phase
+                      const postCancelAllowedIds = combatCancelledInfo?.high
+                        ? ["none", "movDelib", "fullMelee", "movingManeuver", "staticManeuver"]
+                        : ["none", "movDelib"];
+                      const phaseActions = ph.key === "postDeliberate"
+                        ? COMBAT_ACTION_DEFS.filter((a) => a.id === "none" || a.id === "movPost")
+                        : combatCancelledInfo !== null && ph.key === "deliberate"
+                          ? COMBAT_ACTION_DEFS.filter((a) => postCancelAllowedIds.includes(a.id))
+                          : COMBAT_ACTION_DEFS.filter((a) => !a.phase || a.phase === ph.key);
+                      // Build ordered group list (preserving insertion order)
+                      const seenGroups: string[] = [];
+                      phaseActions.forEach((a) => { if (!seenGroups.includes(a.group)) seenGroups.push(a.group); });
+
+                      // ── Resolved view ────────────────────────────
+                      if (ps.resolved) {
+                        return (
+                          <div key={ph.key} className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                              <span className="font-semibold text-slate-700">{ph.label}</span>
+                              {actionDef.id !== "none" && (
+                                <span className="text-sm text-slate-500">{actionDef.label} · {ps.activityPct}%</span>
+                              )}
+                              {actionDef.isAttack && ps.diceResult !== 0 && attackTotals && (
+                                <span className="text-sm font-bold text-slate-800">→ {attackTotals.total}</span>
+                              )}
+                              <Button
+                                type="button" variant="ghost"
+                                className="ml-auto h-7 rounded-xl px-2 text-xs text-slate-500"
+                                onClick={() => updateCombatPhase(ph.key, { resolved: false })}
+                              >
+                                Unresolve
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // ── Cancelled view ───────────────────────────
+                      if (ps.cancelled && !(combatCancelledInfo !== null && ph.key === "deliberate")) {
+                        return (
+                          <div key={ph.key} className="rounded-2xl border border-rose-200 bg-rose-50/60 p-4">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold text-rose-700 line-through">{ph.label}</span>
+                              {actionDef.id !== "none" && (
+                                <span className="text-sm text-rose-500 line-through">{actionDef.label} · {ps.activityPct}%</span>
+                              )}
+                              <span className="rounded-md bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">Cancelled</span>
+                              {combatCancelledInfo === null && (
+                                <Button
+                                  type="button" variant="ghost"
+                                  className="ml-auto h-7 rounded-xl px-2 text-xs text-rose-600"
+                                  onClick={() => updateCombatPhase(ph.key, { cancelled: false })}
+                                >
+                                  Uncancel
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // ── Post-cancellation lock (non-deliberate) ──
+                      if (combatCancelledInfo !== null && ph.key !== "deliberate") {
+                        return (
+                          <div key={ph.key} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 opacity-60">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-500">{ph.label}</span>
+                              <span className="rounded-md bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-500">Locked</span>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // ── Normal view ──────────────────────────────
+                      return (
+                        <div key={ph.key} className="rounded-2xl border bg-white p-4 shadow-sm">
+                          {/* Phase header */}
+                          <div className="mb-3 flex items-center gap-2">
+                            <span className="font-semibold text-slate-800">{ph.label}</span>
+                            {ph.key === "postDeliberate" ? (
+                              <Badge className="rounded-lg px-2 py-0 text-[11px] bg-slate-100 text-slate-600">Movement only</Badge>
+                            ) : (
+                              <Badge className={`rounded-lg px-2 py-0 text-[11px] ${ph.modifier < 0 ? "bg-red-100 text-red-700" : ph.modifier > 0 ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                                {ph.modifier > 0 ? `+${ph.modifier}` : ph.modifier === 0 ? "±0" : ph.modifier} to all rolls
+                              </Badge>
+                            )}
+                            {combatCancelledInfo !== null && ph.key === "deliberate" && (
+                              <Badge className="rounded-lg px-2 py-0 text-[11px] bg-amber-100 text-amber-800">Replacement action only</Badge>
+                            )}
+                            {ps.actionId !== "none" && (
+                              <span className="ml-auto text-sm font-medium tabular-nums text-slate-600">{ps.activityPct}%</span>
+                            )}
+                          </div>
+
+                          {/* Action selector */}
+                          <div className="mb-3">
+                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Action</label>
+                            <Select value={ps.actionId} onValueChange={(v) => {
+                              const def = COMBAT_ACTION_DEFS.find((a) => a.id === v);
+                              updateCombatPhase(ph.key, {
+                                actionId: v,
+                                activityPct: def?.defaultActivity ?? 0,
+                                attackType: def?.attackType ?? ps.attackType,
+                              });
+                            }}>
+                              <SelectContent>
+                                {seenGroups.map((group) => {
+                                  const items = phaseActions.filter((a) => a.group === group);
+                                  if (group === "") {
+                                    return items.map((a) => <SelectItem key={a.id} value={a.id}>{a.label}</SelectItem>);
+                                  }
+                                  return (
+                                    <SelectGroup key={group} label={group}>
+                                      {items.map((a) => <SelectItem key={a.id} value={a.id}>{a.label}</SelectItem>)}
+                                    </SelectGroup>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          {/* Activity % for variable actions */}
+                          {ps.actionId !== "none" && actionDef.variable && (
+                            <div className="mb-3">
+                              <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">
+                                Activity % ({actionDef.minActivity}–{actionDef.maxActivity}%)
+                              </label>
+                              <NumberInput
+                                value={ps.activityPct}
+                                min={actionDef.minActivity}
+                                max={actionDef.maxActivity}
+                                onChange={(v) => updateCombatPhase(ph.key, { activityPct: Math.max(actionDef.minActivity, Math.min(v, actionDef.maxActivity)) })}
+                              />
+                            </div>
+                          )}
+
+                          {/* Movement pace */}
+                          {actionDef.isMovement && (
+                            <div className="mb-3">
+                              <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Pace</label>
+                              <Select value={ps.pace} onValueChange={(v) => updateCombatPhase(ph.key, { pace: v as CombatMovementPace })}>
+                                <SelectContent>
+                                  {COMBAT_MOVEMENT_PACES.map((p) => (
+                                    <SelectItem key={p.key} value={p.key}>{p.label} (×{p.multiplier})</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              {movDistance > 0 && (
+                                <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                                  Distance: <span className="font-semibold">{movDistance} ft</span>
+                                  <span className="ml-1 text-slate-500">({movPaceDef.label}, {ps.activityPct}%)</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Multi-round action indicator */}
+                          {ps.actionId !== "none" && actionDef.totalRequired !== undefined && (
+                            <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 p-3">
+                              <div className="mb-2 text-xs font-semibold text-blue-800">Multi-Round Action — {actionDef.totalRequired}% total required</div>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <div>
+                                  <label className="mb-1 block text-xs text-blue-700">Accumulated from previous rounds (%)</label>
+                                  <NumberInput
+                                    value={ps.accumulatedActivity}
+                                    min={0}
+                                    onChange={(v) => updateCombatPhase(ph.key, { accumulatedActivity: clampNumber(v) })}
+                                  />
+                                </div>
+                                <div className="flex items-center justify-center rounded-xl bg-white p-2 text-center">
+                                  {(() => {
+                                    const tot = ps.accumulatedActivity + ps.activityPct;
+                                    const needed = actionDef.totalRequired!;
+                                    return (
+                                      <div>
+                                        <div className="text-sm font-semibold tabular-nums">{tot}% / {needed}%</div>
+                                        {tot >= needed
+                                          ? <div className="text-xs font-medium text-emerald-700">Completes this round!</div>
+                                          : <div className="text-xs text-blue-700">Need {needed - tot}% more</div>
+                                        }
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* ── Attack sub-panel ────────────────────── */}
+                          {actionDef.isAttack && attackTotals && (
+                            <div className="mt-1 space-y-3 border-t pt-3">
+                              {/* Weapon / OB */}
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div>
+                                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Weapon / Skill</label>
+                                  <Select value={ps.skillName || "__manual__"} onValueChange={(v) => {
+                                    if (v === "__manual__") {
+                                      updateCombatPhase(ph.key, { skillName: "" });
+                                    } else {
+                                      const pool = isMissile ? missileAttacks : meleeAttacks;
+                                      const atk = pool.find((a) => a.name === v);
+                                      updateCombatPhase(ph.key, { skillName: v, baseOB: atk?.total ?? ps.baseOB });
+                                    }
+                                  }}>
+                                    <SelectContent>
+                                      <SelectItem value="__manual__">— Enter OB manually —</SelectItem>
+                                      {(isMissile ? missileAttacks : meleeAttacks).map((a) => (
+                                        <SelectItem key={a.id} value={a.name}>{a.name} ({a.total >= 0 ? "+" : ""}{a.total})</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Base OB</label>
+                                  <NumberInput value={ps.baseOB} onChange={(v) => updateCombatPhase(ph.key, { baseOB: v })} />
+                                </div>
+                              </div>
+
+                              {/* Parry (melee only) */}
+                              {!isMissile && (
+                                <div>
+                                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Parry (OB converted to DB)</label>
+                                  <NumberInput
+                                    value={ps.parryOB}
+                                    min={0}
+                                    max={Math.max(0, ps.baseOB)}
+                                    onChange={(v) => updateCombatPhase(ph.key, { parryOB: Math.max(0, Math.min(v, ps.baseOB)) })}
+                                  />
+                                  {ps.parryOB > 0 && (
+                                    <div className="mt-1 text-xs text-slate-500">
+                                      Remaining OB: {attackTotals.obForAttack} · DB bonus this round: +{attackTotals.parryOB}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Activity penalty display */}
+                              {attackTotals.activityPenalty !== 0 && (
+                                <div className="text-xs text-red-600">Activity penalty: {attackTotals.activityPenalty}</div>
+                              )}
+
+                              {/* OB Modifiers */}
+                              <div className="rounded-xl border bg-slate-50 p-3 space-y-3">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Situational OB Modifiers</div>
+                                <div className="flex flex-wrap gap-x-4 gap-y-2">
+                                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                                    <Checkbox checked={ps.modStunned} onChange={(e) => updateCombatPhase(ph.key, { modStunned: e.target.checked })} />
+                                    Stunned <span className="font-medium text-emerald-600">+20</span>
+                                  </label>
+                                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                                    <Checkbox checked={ps.modDowned} onChange={(e) => updateCombatPhase(ph.key, { modDowned: e.target.checked })} />
+                                    Downed <span className="font-medium text-emerald-600">+30</span>
+                                  </label>
+                                  <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                                    <Checkbox checked={ps.modProne} onChange={(e) => updateCombatPhase(ph.key, { modProne: e.target.checked })} />
+                                    Prone <span className="font-medium text-emerald-600">+50</span>
+                                  </label>
+                                </div>
+                                {!isMissile && (
+                                  <>
+                                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                                      <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                                        <Checkbox checked={ps.modFlank} onChange={(e) => updateCombatPhase(ph.key, { modFlank: e.target.checked })} />
+                                        Flank <span className="font-medium text-emerald-600">+15</span>
+                                      </label>
+                                      <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                                        <Checkbox checked={ps.modRear} onChange={(e) => updateCombatPhase(ph.key, { modRear: e.target.checked })} />
+                                        Rear <span className="font-medium text-emerald-600">+20</span>
+                                      </label>
+                                      <label className="flex cursor-pointer items-center gap-1.5 text-sm">
+                                        <Checkbox checked={ps.modSurprise} onChange={(e) => updateCombatPhase(ph.key, { modSurprise: e.target.checked })} />
+                                        Surprise <span className="font-medium text-emerald-600">+20</span>
+                                      </label>
+                                    </div>
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                      <div>
+                                        <label className="mb-1 block text-xs text-slate-500">Advantageous position</label>
+                                        <NumberInput value={ps.modAdvantage} onChange={(v) => updateCombatPhase(ph.key, { modAdvantage: v })} />
+                                      </div>
+                                      <div>
+                                        <label className="mb-1 flex cursor-pointer items-center gap-1.5 text-xs text-slate-500">
+                                          <Checkbox checked={ps.modCharging} onChange={(e) => updateCombatPhase(ph.key, { modCharging: e.target.checked })} />
+                                          Charging (≥10' movement)
+                                        </label>
+                                        {ps.modCharging && (
+                                          <div className="flex items-center gap-2">
+                                            <NumberInput value={ps.movementFt} min={0} onChange={(v) => updateCombatPhase(ph.key, { movementFt: clampNumber(v) })} className="w-24" />
+                                            <span className="text-xs text-slate-500">ft → <span className="font-medium text-emerald-600">+{ps.movementFt >= 10 ? Math.floor(ps.movementFt / 10) : 0}</span></span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </>
+                                )}
+                                {isMissile && (
+                                  <div className="grid gap-3 sm:grid-cols-2">
+                                    <div>
+                                      <label className="mb-1 block text-xs text-slate-500">Range modifier</label>
+                                      <NumberInput value={ps.modRange} onChange={(v) => updateCombatPhase(ph.key, { modRange: v })} />
+                                    </div>
+                                    <div>
+                                      <label className="mb-1 block text-xs text-slate-500">Armor penalty</label>
+                                      <NumberInput value={ps.modArmorPenalty} onChange={(v) => updateCombatPhase(ph.key, { modArmorPenalty: v })} />
+                                    </div>
+                                  </div>
+                                )}
+                                <div>
+                                  <label className="mb-1 block text-xs text-slate-500">Other modifier</label>
+                                  <NumberInput value={ps.modOther} onChange={(v) => updateCombatPhase(ph.key, { modOther: v })} />
+                                </div>
+                                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+                                  <span>Hits penalty (auto): <span className="font-medium text-slate-600">{healthPenalty(healthPercent) === -999 ? "Unconscious" : signed(healthPenalty(healthPercent))}</span></span>
+                                  <span>EP penalty (auto): <span className="font-medium text-slate-600">{signed(exhaustionPenalty(exhaustionPercent))}</span></span>
+                                </div>
+                              </div>
+
+                              {/* Dice roll */}
+                              <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                                <div>
+                                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Open-Ended 1d100 Result</label>
+                                  <NumberInput value={ps.diceResult} onChange={(v) => updateCombatPhase(ph.key, { diceResult: v, diceBreakdown: "" })} />
+                                  {ps.diceBreakdown && <div className="mt-1 text-xs text-slate-400">{ps.diceBreakdown}</div>}
+                                </div>
+                                <div className="flex items-end">
+                                  <Button type="button" variant="outline" className="h-10 rounded-2xl whitespace-nowrap" onClick={() => rollCombatAttack(ph.key)}>
+                                    Roll d100 OE
+                                  </Button>
+                                </div>
+                              </div>
+
+                              {/* Result breakdown */}
+                              <div className="overflow-hidden rounded-2xl border text-sm">
+                                <div className="grid grid-cols-[1fr_auto] border-b bg-slate-50 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  <span>Modifier</span><span>Value</span>
+                                </div>
+                                <div className="grid grid-cols-[1fr_auto] border-b px-3 py-2">
+                                  <span className="text-slate-600">Dice roll</span>
+                                  <span className="font-semibold tabular-nums">{ps.diceResult !== 0 ? signed(ps.diceResult) : "—"}</span>
+                                </div>
+                                {attackTotals.rows.map((row) => (
+                                  <div key={row.label} className="grid grid-cols-[1fr_auto] border-b px-3 py-1.5 text-xs last:border-0">
+                                    <span className="text-slate-600">{row.label}</span>
+                                    <span className={`font-semibold tabular-nums ${row.value > 0 ? "text-emerald-600" : row.value < 0 ? "text-red-600" : "text-slate-400"}`}>{signed(row.value)}</span>
+                                  </div>
+                                ))}
+                                <div className="grid grid-cols-[1fr_auto] border-t bg-slate-50 px-3 py-2 font-bold">
+                                  <span>Attack Total</span>
+                                  <span className="text-lg tabular-nums">{ps.diceResult !== 0 ? attackTotals.total : "—"}</span>
+                                </div>
+                              </div>
+
+                              {/* Parry DB reminder */}
+                              {!isMissile && ps.parryOB > 0 && (
+                                <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                                  Parry active: <span className="font-semibold">+{attackTotals.parryOB} DB</span> against one incoming attack this round
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Resolve button */}
+                          {ps.actionId !== "none" && (
+                            <div className="mt-3 flex justify-end border-t pt-3">
+                              <Button
+                                type="button" variant="outline"
+                                className="h-8 rounded-xl px-3 text-xs"
+                                onClick={() => updateCombatPhase(ph.key, { resolved: true })}
+                              >
+                                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" /> Mark Resolved
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* ── Cancel Remaining Actions ─────────────────────── */}
+                  {(() => {
+                    const unresolvedActive = COMBAT_PHASES
+                      .filter((ph) => !combatPhases[ph.key].resolved && !combatPhases[ph.key].cancelled && combatPhases[ph.key].actionId !== "none")
+                      .map((ph) => ({ ph, ps: combatPhases[ph.key], def: COMBAT_ACTION_DEFS.find((a) => a.id === combatPhases[ph.key].actionId) }));
+
+                    // After committing a cancellation — show persistent reminder only
+                    if (combatCancelledInfo !== null) {
+                      const { total, high } = combatCancelledInfo;
+                      return (
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                          <div className="mb-2 flex items-center justify-between">
+                            <span className="font-semibold text-amber-900">Actions Cancelled — Allowed replacements:</span>
+                            <Button type="button" variant="ghost" className="h-7 rounded-xl px-2 text-xs text-amber-700"
+                              onClick={() => {
+                                setCombatCancelledInfo(null);
+                                setCombatPhases((prev) => {
+                                  const next = { ...prev } as Record<CombatPhaseKey, CombatPhaseState>;
+                                  (Object.keys(next) as CombatPhaseKey[]).forEach((k) => {
+                                    if (next[k].cancelled) next[k] = { ...next[k], cancelled: false };
+                                  });
+                                  return next;
+                                });
+                              }}
+                            >
+                              Undo cancellation
+                            </Button>
+                          </div>
+                          <div className="mb-2 text-sm text-amber-800">Cancelled activity: <strong>{total}%</strong></div>
+                          <div className="text-sm text-amber-900">
+                            {!high ? (
+                              <ul className="list-disc pl-5">
+                                <li>A <strong>10% movement</strong> as a deliberate action</li>
+                              </ul>
+                            ) : (
+                              <ul className="list-disc pl-5 space-y-0.5">
+                                <li>A <strong>50% movement</strong> as a deliberate action</li>
+                                <li>A <strong>full melee attack</strong> as a deliberate action (–40 OB penalty)</li>
+                                <li>Any <strong>maneuver</strong> as a deliberate action (–40 modifier)</li>
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (unresolvedActive.length === 0) return null;
+                    const cancelledTotal = unresolvedActive.reduce((s, x) => s + x.ps.activityPct, 0);
+                    const highCancel = cancelledTotal >= 60;
+                    return (
+                      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="font-semibold text-amber-900">Cancel Remaining Actions</span>
+                          <Button type="button" variant="ghost" className="h-7 rounded-xl px-2 text-xs text-amber-700"
+                            onClick={() => {
+                              unresolvedActive.forEach((x) => {
+                                if (x.ph.key === "deliberate") {
+                                  updateCombatPhase("deliberate", makeCombatPhaseState());
+                                } else {
+                                  updateCombatPhase(x.ph.key, { cancelled: true });
+                                }
+                              });
+                              setCombatCancelledInfo({ total: cancelledTotal, high: highCancel });
+                            }}
+                          >
+                            Cancel all
+                          </Button>
+                        </div>
+                        <div className="mb-3 text-sm text-amber-800">
+                          Unresolved: {unresolvedActive.map((x) => `${x.ph.label} (${x.ps.activityPct}%)`).join(", ")} = <strong>{cancelledTotal}%</strong>
+                        </div>
+                        <div className="text-sm text-amber-900">
+                          <span className="font-medium">If cancelled now, you may take:</span>
+                          {!highCancel ? (
+                            <ul className="mt-1 list-disc pl-5">
+                              <li>A <strong>10% movement</strong> as a deliberate action</li>
+                            </ul>
+                          ) : (
+                            <ul className="mt-1 list-disc pl-5 space-y-0.5">
+                              <li>A <strong>50% movement</strong> as a deliberate action</li>
+                              <li>A <strong>full melee attack</strong> as a deliberate action (–40 OB penalty)</li>
+                              <li>Any <strong>maneuver</strong> as a deliberate action (–40 modifier)</li>
+                            </ul>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ── Armor / Movement / Resistance ───────────────── */}
+                  <div className="grid gap-4 xl:grid-cols-3">
+                    <SectionCard title="Armor">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {[
+                          ["armorType", "Armor Type"], ["weightPenalty", "Weight Penalty"], ["baseMovementRate", "Base Movement Rate"], ["movingManeuverPenalty", "Moving Maneuver Penalty"], ["missilePenalty", "Missile Penalty"], ["armorQuicknessPenalty", "Armor Quickness Penalty"], ["shieldBonus", "Shield Bonus"], ["magicBonus", "Magic Bonus"], ["specialBonus", "Special"],
+                        ].map(([key, label]) => (
+                          <div key={key}>
+                            <label className="mb-1 block text-sm">{label}</label>
+                            <NumberInput value={(sheet.armor as any)[key]} onChange={(v) => updateSheet((prev) => ({ ...prev, armor: { ...prev.armor, [key]: v } }))} />
+                          </div>
+                        ))}
+                        <div>
+                          <label className="mb-1 block text-sm">Quickness Bonus</label>
+                          <Input value={armorQuicknessBonus} readOnly />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm">Total Normal DB</label>
+                          <Input value={totalNormalDB} readOnly />
+                        </div>
+                      </div>
+                    </SectionCard>
+
+                    <SectionCard title="Movement Rates" action={<Badge>{sheet.armor.baseMovementRate} base</Badge>}>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b text-left">
+                              <th className="py-2">Pace</th>
+                              <th>Mult.</th>
+                              <th>Rate (ft)</th>
+                              <th>Exhaustion</th>
+                              <th>Difficulty</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {[
+                              ["Walk", 1, "1/60 per round", "None"],
+                              ["Fast Walk", 1.5, "1/30 per round", "None"],
+                              ["Run", 2, "1/12 per round", "None"],
+                              ["Sprint", 3, "2 per round", "Easy"],
+                              ["Fast Sprint", 4, "6 per round", "Light"],
+                              ["Dash", 5, "50 per round", "Medium"],
+                            ].map(([pace, multiplier, exhaustion, difficulty]) => (
+                              <tr key={String(pace)} className="border-b">
+                                <td className="py-2 font-medium">{pace}</td>
+                                <td>×{multiplier}</td>
+                                <td>{Math.round(sheet.armor.baseMovementRate * Number(multiplier))}</td>
+                                <td>{String(exhaustion)}</td>
+                                <td>{String(difficulty)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </SectionCard>
+
+                    <SectionCard title="Resistance Rolls">
+                      <div className="space-y-3">
+                        {(["Channeling", "Essence", "Mentalism", "Poison", "Disease", "Fear"] as ResistanceName[]).map((rr) => (
+                          <div key={rr} className="grid items-center gap-2 rounded-2xl border p-3 md:grid-cols-4">
+                            <div className="font-medium">{rr}</div>
+                            <div>Race: {resistanceRolls[rr].raceBonus}</div>
+                            <div>Stat: {resistanceRolls[rr].statBonus}</div>
+                            <div className="font-semibold">Total: {resistanceRolls[rr].raceBonus + resistanceRolls[rr].statBonus}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </SectionCard>
+                  </div>
+                </>
+              );
+            })()}
           </TabsContent>
 
           <TabsContent value="categories" className="space-y-4">
@@ -2756,6 +3561,16 @@ export default function RolemasterCharacterSheetEngine() {
                             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Special</label>
                             <NumberInput value={cat.specialBonus} onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, specialBonus: v } : c) }))} />
                           </div>
+                          {(cat.progressionType === "bodyDevelopment" || cat.progressionType === "powerPointDevelopment") && (
+                            <div>
+                              <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Point Bonus / Rank</label>
+                              <NumberInput value={cat.developmentPointBonus ?? 0} onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, developmentPointBonus: v || undefined } : c) }))} />
+                              <div className="mt-1 text-xs text-slate-400">
+                                Race default: {formatProgression(cat.progressionType === "bodyDevelopment" ? selectedRace.bodyDevelopmentProgression : selectedRace.ppDevelopmentProgressionByRealm[primaryRealm])}
+                                {(cat.developmentPointBonus ?? 0) !== 0 && <span className="ml-1">→ effective: {formatProgression(cat.progression)}</span>}
+                              </div>
+                            </div>
+                          )}
                           {canEditCategoryNewRanks(cat.progressionType) ? (
                             <div>
                               <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Ranks</label>
@@ -2803,7 +3618,17 @@ export default function RolemasterCharacterSheetEngine() {
                     <tbody>
                       {categoryDerived.map((cat) => (
                         <tr key={cat.id} className="border-b align-middle">
-                          <td className="py-2 px-2 font-medium">{cat.name}<div className="mt-1 text-xs text-slate-500">{formatProgression(cat.progression)}</div></td>
+                          <td className="py-2 px-2 font-medium">
+                            {cat.name}
+                            <div className="mt-1 text-xs text-slate-500">{formatProgression(cat.progression)}</div>
+                            {(cat.progressionType === "bodyDevelopment" || cat.progressionType === "powerPointDevelopment") && (
+                              <div className="mt-1 flex items-center gap-1">
+                                <span className="text-xs text-slate-400">+</span>
+                                <NumberInput value={cat.developmentPointBonus ?? 0} className="w-14 h-7 text-xs" onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, developmentPointBonus: v || undefined } : c) }))} />
+                                <span className="text-xs text-slate-400">/ rank</span>
+                              </div>
+                            )}
+                          </td>
                           <td className="px-2 text-xs font-mono">{cat.applicableStatsDisplay}</td>
                           <td className="px-2">
                             {isBandedDevelopmentCost(cat.developmentCost) ? (
@@ -3225,154 +4050,6 @@ export default function RolemasterCharacterSheetEngine() {
                     </div>
                   ))}
 
-                  {isCastAssistantOpen && selectedCastList && selectedCastSpell && (
-                    <div
-                      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
-                      onMouseDown={(event) => {
-                        castModalBackdropMouseDownRef.current = event.target === event.currentTarget;
-                      }}
-                      onMouseUp={(event) => {
-                        const shouldClose = castModalBackdropMouseDownRef.current && event.target === event.currentTarget;
-                        castModalBackdropMouseDownRef.current = false;
-                        if (shouldClose) setIsCastAssistantOpen(false);
-                      }}
-                      onMouseLeave={() => {
-                        castModalBackdropMouseDownRef.current = false;
-                      }}
-                    >
-                      <div className="mx-auto w-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
-                        <SectionCard
-                          title="Spell Casting Assistant"
-                          action={(
-                            <div className="flex items-center gap-2">
-                              <Badge>{signed(castTotalModifier)}</Badge>
-                              <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setIsCastAssistantOpen(false)}>
-                                Close
-                              </Button>
-                            </div>
-                          )}
-                        >
-                          <div className="space-y-3">
-                            <div className="rounded-2xl border bg-white p-3 text-sm">
-                              <div className="font-semibold text-slate-800">{selectedCastSpell.name}{selectedCastSpell.specialCodes.length > 0 ? ` ${selectedCastSpell.specialCodes.join("")}` : ""}</div>
-                              <div className="mt-1 text-xs text-slate-500">
-                                {selectedCastList.entry.name} • {selectedCastList.entry.realm} {selectedCastList.entry.type} • Level {selectedCastSpell.level}
-                              </div>
-                            </div>
-
-                            <div className="grid gap-2 rounded-2xl border bg-slate-50 p-3 text-sm md:grid-cols-4">
-                              <div>Realm: <span className="font-semibold">{castRealm}</span></div>
-                              <div>Level Delta: <span className="font-semibold">{castLevelDelta}</span></div>
-                              <div>Instant: <span className="font-semibold">{castIsInstantaneous ? "Yes" : "No"}</span></div>
-                              <div>PP Cost: <span className="font-semibold">{castPpCost}</span></div>
-                            </div>
-
-                            <div className="grid gap-2 md:grid-cols-4">
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Prep Rounds</label>
-                                <NumberInput value={castPrepRounds} min={0} onChange={(v) => setCastPrepRounds(clampNumber(v))} />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Free Hands</label>
-                                <Select value={castFreeHands} onValueChange={(v) => setCastFreeHands(v as FreeHandsMode)}>
-                                  <SelectTrigger><SelectValue /></SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="none">None</SelectItem>
-                                    <SelectItem value="one">One</SelectItem>
-                                    <SelectItem value="two">Two</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Voice</label>
-                                <Select value={castVoice} onValueChange={(v) => setCastVoice(v as VoiceMode)}>
-                                  <SelectTrigger><SelectValue /></SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="none">None</SelectItem>
-                                    <SelectItem value="whisper">Whisper</SelectItem>
-                                    <SelectItem value="normal">Normal</SelectItem>
-                                    <SelectItem value="shout">Shout</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Helmet</label>
-                                <Select value={castHelmet} onValueChange={(v) => setCastHelmet(v as HelmetMode)}>
-                                  <SelectTrigger><SelectValue /></SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="none">None</SelectItem>
-                                    <SelectItem value="leather">Leather</SelectItem>
-                                    <SelectItem value="leatherMetal">Leather and Metal</SelectItem>
-                                    <SelectItem value="metal">Metal</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            </div>
-
-                            <div className="grid gap-2 md:grid-cols-3">
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Organic Living Weight</label>
-                                <NumberInput value={castOrganicLivingWeight} min={0} onChange={(v) => setCastOrganicLivingWeight(clampNumber(v))} />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Organic Non-Living Weight</label>
-                                <NumberInput value={castOrganicNonLivingWeight} min={0} onChange={(v) => setCastOrganicNonLivingWeight(clampNumber(v))} />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Inorganic Weight</label>
-                                <NumberInput value={castInorganicWeight} min={0} onChange={(v) => setCastInorganicWeight(clampNumber(v))} />
-                              </div>
-                            </div>
-
-                            <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Open Ended 1d100</label>
-                                <NumberInput value={castOpenEndedRoll} onChange={setCastOpenEndedRoll} />
-                                {castRollBreakdown && <div className="mt-1 text-xs text-slate-500">{castRollBreakdown}</div>}
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Manual Modifier</label>
-                                <NumberInput value={castManualModifier} onChange={setCastManualModifier} />
-                              </div>
-                              <div className="flex items-end">
-                                <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={rollCastingOpenEnded}>Roll d100 OE</Button>
-                              </div>
-                            </div>
-
-                            <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                              <Checkbox checked={castSnapAction} onChange={(e) => setCastSnapAction(e.target.checked)} disabled={castIsInstantaneous} />
-                              Cast as Snap Action (non-instantaneous only)
-                            </label>
-
-                            <div className="rounded-2xl border">
-                              <div className="grid grid-cols-[1fr_auto] border-b bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                <span>Modifier</span>
-                                <span>Total</span>
-                              </div>
-                              {castModifierRows.map((row) => (
-                                <div key={row.label} className="grid grid-cols-[1fr_auto] px-3 py-2 text-sm border-b last:border-b-0">
-                                  <span>{row.label}</span>
-                                  <span className="font-semibold">{signed(row.value)}</span>
-                                </div>
-                              ))}
-                              <div className="grid grid-cols-[1fr_auto] px-3 py-2 text-sm font-bold">
-                                <span>Casting Modifier</span>
-                                <span>{signed(castTotalModifier)}</span>
-                              </div>
-                            </div>
-
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="text-sm text-slate-600">PP used: {sheet.magic.currentPP} / {totalPP}</div>
-                              <Button type="button" className="rounded-2xl" disabled={!selectedCastSpell} onClick={castSelectedSpell}>
-                                Cast Spell and Spend {castPpCost} PP
-                              </Button>
-                            </div>
-                            {lastCastSummary && <div className="text-sm text-slate-600">{lastCastSummary}</div>}
-                          </div>
-                        </SectionCard>
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })()}
@@ -3675,6 +4352,244 @@ export default function RolemasterCharacterSheetEngine() {
           </div>
         </Tabs>
       </div>
+
+      {poolEditModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"
+          data-no-tab-swipe="true"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setPoolEditModal(null); }}
+        >
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            {poolEditModal === "hits" && (
+              <>
+                <div className="mb-4 text-base font-semibold text-slate-900">Concussion Hits</div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Total Hits (read-only)</label>
+                    <Input value={totalHits} readOnly />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Hits Taken</label>
+                    <NumberInput value={sheet.health.currentHits} onChange={(v) => updateSheet((prev) => ({ ...prev, health: { ...prev.health, currentHits: clampNumber(v) } }))} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Stunned</label>
+                    <Input value={sheet.health.stunned} onChange={(e) => updateSheet((prev) => ({ ...prev, health: { ...prev.health, stunned: e.target.value } }))} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Stun No Parry</label>
+                    <Input value={sheet.health.stunNoParry} onChange={(e) => updateSheet((prev) => ({ ...prev, health: { ...prev.health, stunNoParry: e.target.value } }))} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Down & Out</label>
+                    <Input value={sheet.health.downAndOut} onChange={(e) => updateSheet((prev) => ({ ...prev, health: { ...prev.health, downAndOut: e.target.value } }))} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Bleed / Round</label>
+                    <Input value={sheet.health.bleedPerRound} onChange={(e) => updateSheet((prev) => ({ ...prev, health: { ...prev.health, bleedPerRound: e.target.value } }))} />
+                  </div>
+                  <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-600">
+                    Penalty: {healthPenalty(healthPercent) === -999 ? "Unconscious" : healthPenalty(healthPercent)}
+                  </div>
+                </div>
+              </>
+            )}
+            {poolEditModal === "pp" && (
+              <>
+                <div className="mb-4 text-base font-semibold text-slate-900">Power Points</div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Total PP (read-only)</label>
+                    <Input value={totalPP} readOnly />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">PP Used</label>
+                    <NumberInput value={sheet.magic.currentPP} onChange={(v) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, currentPP: clampNumber(v) } }))} />
+                  </div>
+                  <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-600">
+                    Penalty: {magicPenalty(magicPercent)}
+                  </div>
+                </div>
+              </>
+            )}
+            {poolEditModal === "ep" && (
+              <>
+                <div className="mb-4 text-base font-semibold text-slate-900">Exhaustion Points</div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Total EP (read-only)</label>
+                    <Input value={totalEP} readOnly />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Special Bonus</label>
+                    <NumberInput value={sheet.exhaustion.specialBonus} onChange={(v) => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, specialBonus: v } }))} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">EP Used</label>
+                    <NumberInput value={sheet.exhaustion.currentEP} onChange={(v) => updateSheet((prev) => ({ ...prev, exhaustion: { ...prev.exhaustion, currentEP: clampNumber(v) } }))} />
+                  </div>
+                  <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-600">
+                    Penalty: {exhaustionPenalty(exhaustionPercent)}
+                  </div>
+                </div>
+              </>
+            )}
+            <div className="mt-4 flex justify-end">
+              <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setPoolEditModal(null)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isCastAssistantOpen && selectedCastList && selectedCastSpell && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
+          data-no-tab-swipe="true"
+          onMouseDown={(event) => {
+            castModalBackdropMouseDownRef.current = event.target === event.currentTarget;
+          }}
+          onMouseUp={(event) => {
+            const shouldClose = castModalBackdropMouseDownRef.current && event.target === event.currentTarget;
+            castModalBackdropMouseDownRef.current = false;
+            if (shouldClose) setIsCastAssistantOpen(false);
+          }}
+          onMouseLeave={() => {
+            castModalBackdropMouseDownRef.current = false;
+          }}
+        >
+          <div className="mx-auto w-full max-w-5xl" onClick={(event) => event.stopPropagation()}>
+            <SectionCard
+              title="Spell Casting Assistant"
+              action={(
+                <div className="flex items-center gap-2">
+                  <Badge>{signed(castTotalModifier)}</Badge>
+                  <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setIsCastAssistantOpen(false)}>
+                    Close
+                  </Button>
+                </div>
+              )}
+            >
+              <div className="space-y-3">
+                <div className="rounded-2xl border bg-white p-3 text-sm">
+                  <div className="font-semibold text-slate-800">{selectedCastSpell.name}{selectedCastSpell.specialCodes.length > 0 ? ` ${selectedCastSpell.specialCodes.join("")}` : ""}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {selectedCastList.entry.name} • {selectedCastList.entry.realm} {selectedCastList.entry.type} • Level {selectedCastSpell.level}
+                  </div>
+                </div>
+
+                <div className="grid gap-2 rounded-2xl border bg-slate-50 p-3 text-sm md:grid-cols-4">
+                  <div>Realm: <span className="font-semibold">{castRealm}</span></div>
+                  <div>Level Delta: <span className="font-semibold">{castLevelDelta}</span></div>
+                  <div>Instant: <span className="font-semibold">{castIsInstantaneous ? "Yes" : "No"}</span></div>
+                  <div>PP Cost: <span className="font-semibold">{castPpCost}</span></div>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-4">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Prep Rounds</label>
+                    <NumberInput value={castPrepRounds} min={0} onChange={(v) => setCastPrepRounds(clampNumber(v))} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Free Hands</label>
+                    <Select value={castFreeHands} onValueChange={(v) => setCastFreeHands(v as FreeHandsMode)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="one">One</SelectItem>
+                        <SelectItem value="two">Two</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Voice</label>
+                    <Select value={castVoice} onValueChange={(v) => setCastVoice(v as VoiceMode)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="whisper">Whisper</SelectItem>
+                        <SelectItem value="normal">Normal</SelectItem>
+                        <SelectItem value="shout">Shout</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Helmet</label>
+                    <Select value={castHelmet} onValueChange={(v) => setCastHelmet(v as HelmetMode)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="leather">Leather</SelectItem>
+                        <SelectItem value="leatherMetal">Leather and Metal</SelectItem>
+                        <SelectItem value="metal">Metal</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-3">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Organic Living Weight</label>
+                    <NumberInput value={castOrganicLivingWeight} min={0} onChange={(v) => setCastOrganicLivingWeight(clampNumber(v))} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Organic Non-Living Weight</label>
+                    <NumberInput value={castOrganicNonLivingWeight} min={0} onChange={(v) => setCastOrganicNonLivingWeight(clampNumber(v))} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Inorganic Weight</label>
+                    <NumberInput value={castInorganicWeight} min={0} onChange={(v) => setCastInorganicWeight(clampNumber(v))} />
+                  </div>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Open Ended 1d100</label>
+                    <NumberInput value={castOpenEndedRoll} onChange={setCastOpenEndedRoll} />
+                    {castRollBreakdown && <div className="mt-1 text-xs text-slate-500">{castRollBreakdown}</div>}
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Manual Modifier</label>
+                    <NumberInput value={castManualModifier} onChange={setCastManualModifier} />
+                  </div>
+                  <div className="flex items-end">
+                    <Button type="button" variant="outline" className="h-10 rounded-2xl" onClick={rollCastingOpenEnded}>Roll d100 OE</Button>
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                  <Checkbox checked={castSnapAction} onChange={(e) => setCastSnapAction(e.target.checked)} disabled={castIsInstantaneous} />
+                  Cast as Snap Action (non-instantaneous only)
+                </label>
+
+                <div className="rounded-2xl border">
+                  <div className="grid grid-cols-[1fr_auto] border-b bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <span>Modifier</span>
+                    <span>Total</span>
+                  </div>
+                  {castModifierRows.map((row) => (
+                    <div key={row.label} className="grid grid-cols-[1fr_auto] px-3 py-2 text-sm border-b last:border-b-0">
+                      <span>{row.label}</span>
+                      <span className="font-semibold">{signed(row.value)}</span>
+                    </div>
+                  ))}
+                  <div className="grid grid-cols-[1fr_auto] px-3 py-2 text-sm font-bold">
+                    <span>Casting Modifier</span>
+                    <span>{signed(castTotalModifier)}</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm text-slate-600">PP used: {sheet.magic.currentPP} / {totalPP}</div>
+                  <Button type="button" className="rounded-2xl" disabled={!selectedCastSpell} onClick={castSelectedSpell}>
+                    Cast Spell and Spend {castPpCost} PP
+                  </Button>
+                </div>
+                {lastCastSummary && <div className="text-sm text-slate-600">{lastCastSummary}</div>}
+              </div>
+            </SectionCard>
+          </div>
+        </div>
+      )}
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 p-2 backdrop-blur md:hidden" data-no-tab-swipe="true">
         <div ref={mobileCharacterTabsRef} className="overflow-x-auto">

@@ -7,8 +7,8 @@ export function resolveStatLevelRoll(temp: number, potential: number, die1: numb
   let explanation = "";
 
   if (isDouble && die1 <= 5) {
-    nextTemp = temp - sum;
-    explanation = `Double ${die1}: temp -${sum}`;
+    nextTemp = temp - die1;
+    explanation = `Double ${die1}: temp -${die1}`;
   } else if (isDouble && die1 >= 6) {
     if (temp >= potential) {
       nextPotential = potential + 1;
