@@ -429,6 +429,8 @@ export default function RolemasterCharacterSheetEngine() {
   const [editingSkillId, setEditingSkillId] = useState<string | null>(null);
   const [expandedMobileStat, setExpandedMobileStat] = useState<StatName | null>(null);
   const [expandedMobileCategoryId, setExpandedMobileCategoryId] = useState<string | null>(null);
+  const [hideEmptyCategories, setHideEmptyCategories] = useState(false);
+  const [alwaysShowSkills, setAlwaysShowSkills] = useState(false);
   const [expandedSpellListIds, setExpandedSpellListIds] = useState<Set<string>>(() => new Set());
   const [expandedGearItemId, setExpandedGearItemId] = useState<string | null>(null);
   const [editingGearItemId, setEditingGearItemId] = useState<string | null>(null);
@@ -3561,10 +3563,24 @@ export default function RolemasterCharacterSheetEngine() {
           </TabsContent>
 
           <TabsContent value="categories" className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-sm text-slate-600">
+                  <Checkbox checked={hideEmptyCategories} onChange={(e) => setHideEmptyCategories(e.target.checked)} />
+                  Hide categories without skills
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-600">
+                  <Checkbox checked={alwaysShowSkills} onChange={(e) => setAlwaysShowSkills(e.target.checked)} />
+                  Always show skills
+                </label>
+              </div>
+              <Button type="button" variant="outline" className="rounded-2xl h-8 px-3 text-sm" onClick={() => addSkillFromSkillsTab()}><Plus className="mr-1 h-3 w-3" />New Skill</Button>
+            </div>
             <div className="space-y-3">
               {categoryDerived.map((cat) => {
                 const isExpanded = expandedMobileCategoryId === cat.id;
                 const catSkills = skillDerived.filter((skill) => skill.categoryId === cat.id);
+                if (hideEmptyCategories && catSkills.length === 0) return null;
                 return (
                   <div
                     key={cat.id}
@@ -3590,8 +3606,10 @@ export default function RolemasterCharacterSheetEngine() {
                         {isExpanded ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
                       </div>
                     </button>
-                    {isExpanded && (
+                    {(isExpanded || alwaysShowSkills) && (
                       <div className="space-y-4 border-t p-3">
+                        {isExpanded && (
+                        <>
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div>
                             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Dev Cost</label>
@@ -3645,11 +3663,9 @@ export default function RolemasterCharacterSheetEngine() {
                         </div>
 
                         <Separator />
+                        </>
+                        )}
 
-                        <div className="flex items-center justify-between">
-                          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Skills in this category</div>
-                          <Button type="button" variant="outline" className="h-8 rounded-2xl px-3 text-xs" onClick={() => addSkillFromSkillsTab(cat.id)}><Plus className="mr-1 h-3 w-3" />Add Skill</Button>
-                        </div>
                         {catSkills.length === 0
                           ? <div className="text-sm text-slate-500">No skills yet. Drag a skill here to move it into this category.</div>
                           : (
@@ -3660,13 +3676,14 @@ export default function RolemasterCharacterSheetEngine() {
                                   draggable
                                   onDragStart={() => setDraggedSkillId(skill.id)}
                                   onDragEnd={() => setDraggedSkillId(null)}
-                                  className={`flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm ${draggedSkillId === skill.id ? "opacity-50" : ""}`}
+                                  onClick={() => setEditingSkillId(skill.id)}
+                                  className={`flex cursor-pointer items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm hover:bg-slate-50 ${draggedSkillId === skill.id ? "opacity-50" : ""}`}
                                 >
                                   <span className="shrink-0 cursor-grab text-slate-400" title="Drag to move to another category">::</span>
                                   <button
                                     type="button"
                                     className="rounded-full p-1"
-                                    onClick={() => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, favorite: !s.favorite } : s) }))}
+                                    onClick={(e) => { e.stopPropagation(); updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, favorite: !s.favorite } : s) })); }}
                                     title="Favorite"
                                   >
                                     <Star className={`h-4 w-4 ${skill.favorite ? "fill-current text-yellow-500" : "text-slate-300"}`} />
@@ -3681,8 +3698,8 @@ export default function RolemasterCharacterSheetEngine() {
                                     </div>
                                   </div>
                                   <div className="flex shrink-0 items-center gap-1">
-                                    <Button type="button" variant="outline" className="h-8 rounded-xl px-2 text-xs" onClick={() => setEditingSkillId(skill.id)}>Edit</Button>
-                                    <Button type="button" variant="ghost" size="icon" onClick={() => {
+                                    <Button type="button" variant="ghost" size="icon" onClick={(e) => {
+                                      e.stopPropagation();
                                       setEditingSkillId((prev) => prev === skill.id ? null : prev);
                                       updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== skill.id) }));
                                     }}><Trash2 className="h-4 w-4" /></Button>
@@ -3691,6 +3708,7 @@ export default function RolemasterCharacterSheetEngine() {
                               ))}
                             </div>
                           )}
+
                       </div>
                     )}
                   </div>
