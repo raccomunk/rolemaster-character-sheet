@@ -1325,6 +1325,17 @@ export default function RolemasterCharacterSheetEngine() {
     }));
   };
 
+  const closeEditingSkillModal = () => {
+    if (editingSkillId) {
+      const skill = sheet.skills.find((s) => s.id === editingSkillId);
+      // discard skills created via "New Skill"/"Add Skill" that were closed before naming them
+      if (skill && !skill.name.trim()) {
+        updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== editingSkillId) }));
+      }
+    }
+    setEditingSkillId(null);
+  };
+
   const addSkillFromSkillsTab = (categoryId?: string) => {
     const newSkill: Skill = {
       id: uid("skill"),
@@ -4109,7 +4120,7 @@ export default function RolemasterCharacterSheetEngine() {
           onMouseUp={(event) => {
             const shouldClose = skillModalBackdropMouseDownRef.current && event.target === event.currentTarget;
             skillModalBackdropMouseDownRef.current = false;
-            if (shouldClose) setEditingSkillId(null);
+            if (shouldClose) closeEditingSkillModal();
           }}
           onMouseLeave={() => {
             skillModalBackdropMouseDownRef.current = false;
@@ -4119,7 +4130,7 @@ export default function RolemasterCharacterSheetEngine() {
             <SectionCard
               title="Edit Skill"
               action={(
-                <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setEditingSkillId(null)}>
+                <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={closeEditingSkillModal}>
                   Close
                 </Button>
               )}
