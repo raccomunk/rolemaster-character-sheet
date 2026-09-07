@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -410,8 +410,7 @@ const TAB_OPTIONS = [
   { value: "details", label: "Details" },
   { value: "stats", label: "Stats" },
   { value: "combat", label: "Combat" },
-  { value: "categories", label: "Skill Categories" },
-  { value: "skills", label: "Skills" },
+  { value: "categories", label: "Skills" },
   { value: "spells", label: "Spells" },
   { value: "gear", label: "Gear" },
   { value: "status", label: "Status" },
@@ -458,11 +457,15 @@ export default function RolemasterCharacterSheetEngine() {
   const [castOrganicNonLivingWeight, setCastOrganicNonLivingWeight] = useState(0);
   const [castInorganicWeight, setCastInorganicWeight] = useState(0);
   const [castManualModifier, setCastManualModifier] = useState(0);
+  const [castUseFreeSpell, setCastUseFreeSpell] = useState(false);
   const [castOpenEndedRoll, setCastOpenEndedRoll] = useState(0);
   const [castRollBreakdown, setCastRollBreakdown] = useState("");
   const [lastCastSummary, setLastCastSummary] = useState("");
   const [selectedUseAction, setSelectedUseAction] = useState<{ label: string; name: string; bonus: number } | null>(null);
   const [poolEditModal, setPoolEditModal] = useState<"hits" | "pp" | "ep" | null>(null);
+  const [isHealingModalOpen, setIsHealingModalOpen] = useState(false);
+  const [healingHours, setHealingHours] = useState(0);
+  const [healingActivity, setHealingActivity] = useState<"active" | "resting" | "sleeping">("active");
   const [combatInitDie1, setCombatInitDie1] = useState(0);
   const [combatInitDie2, setCombatInitDie2] = useState(0);
   const [combatInitBreakdown, setCombatInitBreakdown] = useState("");
@@ -481,7 +484,7 @@ export default function RolemasterCharacterSheetEngine() {
   const [transitionKey, setTransitionKey] = useState(0);
   const transitionDir = React.useRef<"left" | "right" | "fade">("fade");
   const activeTabRef = useRef<ActiveView>("front");
-  const [draggedSkillIndex, setDraggedSkillIndex] = useState<number | null>(null);
+  const [draggedSkillId, setDraggedSkillId] = useState<string | null>(null);
   const [draggedGearIndex, setDraggedGearIndex] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
@@ -558,6 +561,7 @@ export default function RolemasterCharacterSheetEngine() {
     setCastOrganicNonLivingWeight(0);
     setCastInorganicWeight(0);
     setCastManualModifier(0);
+    setCastUseFreeSpell(false);
     setCastOpenEndedRoll(0);
     setCastRollBreakdown("");
     setLastCastSummary("");
@@ -566,6 +570,9 @@ export default function RolemasterCharacterSheetEngine() {
     setUseActionRollBreakdown("");
     setUseActionExtraModifier(0);
     setPoolEditModal(null);
+    setIsHealingModalOpen(false);
+    setHealingHours(0);
+    setHealingActivity("active");
     setCombatInitDie1(0);
     setCombatInitDie2(0);
     setCombatInitBreakdown("");
@@ -607,7 +614,7 @@ export default function RolemasterCharacterSheetEngine() {
     localStorage.setItem("rolemaster-party", JSON.stringify(characters));
   }, [characters, loaded]);
 
-  const isAnyModalOpen = isCastAssistantOpen || Boolean(editingSkillId) || Boolean(editingGearItemId) || Boolean(selectedUseAction) || Boolean(poolEditModal);
+  const isAnyModalOpen = isCastAssistantOpen || Boolean(editingSkillId) || Boolean(editingGearItemId) || Boolean(selectedUseAction) || Boolean(poolEditModal) || isHealingModalOpen;
 
   useEffect(() => {
     if (!isAnyModalOpen) return;
@@ -623,6 +630,11 @@ export default function RolemasterCharacterSheetEngine() {
 
   // Sync activeTabRef so hashchange handler never has a stale closure
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
+
+  // Runs after the new tab's content has committed, so scroll anchoring can't undo it
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [activeTab]);
 
   // Hash-based navigation: back/forward works on all platforms incl. Android back button + iOS edge swipe
   useEffect(() => {
@@ -960,12 +972,28 @@ export default function RolemasterCharacterSheetEngine() {
 
   const raceExhaustionBonus = parseExhaustionBonusFromRaceNotes(selectedRace.specialNotes);
   const totalHits = Math.max(0, bodyDevelopmentTotal);
-  const totalPP = Math.max(0, powerPointTotal);
+  const spellMultiplierValue = parseFloat(sheet.magic.spellMultiplier) || 1;
+  const spellAdderValue = parseInt(sheet.magic.spellAdder, 10) || 0;
+  const totalPP = Math.max(0, Math.round(powerPointTotal * spellMultiplierValue));
   const totalEP = Math.max(0, 40 + statTotals["Constitution"].total * 3 + raceExhaustionBonus + sheet.exhaustion.specialBonus);
 
   const currentHitsPool = totalHits - sheet.health.currentHits;
   const currentPPPool = Math.max(0, totalPP - sheet.magic.currentPP);
   const currentEPPool = Math.max(0, totalEP - sheet.exhaustion.currentEP);
+
+  const healingPrimaryRealm = firstMagicalRealm(sheet.details.realmOfPower as Realm[]);
+  const healingRealmStatBonus = statTotals[REALM_STAT_MAP[healingPrimaryRealm]].total;
+  const healingConBonus = statTotals["Constitution"].total;
+  const healingThreeHourPeriods = Math.floor(healingHours / 3);
+  const healingOneHourPeriods = Math.floor(healingHours);
+  const healingTier1Hits = healingThreeHourPeriods * 1;
+  const healingTier1PP = healingThreeHourPeriods * 1;
+  const healingTier2Hits = healingActivity !== "active" ? healingOneHourPeriods * Math.max(1, Math.round(healingConBonus / 2)) : 0;
+  const healingTier2PP = healingActivity !== "active" ? healingOneHourPeriods * Math.max(1, Math.round(healingRealmStatBonus / 2)) : 0;
+  const healingTier3Hits = healingActivity === "sleeping" ? healingThreeHourPeriods * Math.max(3, healingConBonus * 2) : 0;
+  const healingTier3PP = healingActivity === "sleeping" ? healingThreeHourPeriods * Math.round(totalPP / 2) : 0;
+  const healingTotalHits = healingTier1Hits + healingTier2Hits + healingTier3Hits;
+  const healingTotalPP = healingTier1PP + healingTier2PP + healingTier3PP;
 
   const healthPercent = pctUsed(sheet.health.currentHits, totalHits);
   const magicPercent = pctUsed(sheet.magic.currentPP, totalPP);
@@ -1277,6 +1305,17 @@ export default function RolemasterCharacterSheetEngine() {
 
   const updateSheet = (updater: (prev: CharacterSheet) => CharacterSheet) => setSheet(updater);
 
+  const applyPassiveHealing = () => {
+    updateSheet((prev) => ({
+      ...prev,
+      health: { ...prev.health, currentHits: clampNumber(prev.health.currentHits - healingTotalHits) },
+      magic: { ...prev.magic, currentPP: clampNumber(prev.magic.currentPP - healingTotalPP) },
+    }));
+    setIsHealingModalOpen(false);
+    setHealingHours(0);
+  };
+
+
   const updateSkill = (skillId: string, patch: Partial<Skill>) => {
     updateSheet((prev) => ({
       ...prev,
@@ -1284,11 +1323,11 @@ export default function RolemasterCharacterSheetEngine() {
     }));
   };
 
-  const addSkillFromSkillsTab = () => {
+  const addSkillFromSkillsTab = (categoryId?: string) => {
     const newSkill: Skill = {
       id: uid("skill"),
       name: "",
-      categoryId: sheet.skillCategories[0]?.id ?? "",
+      categoryId: categoryId ?? sheet.skillCategories[0]?.id ?? "",
       ranks: 0,
       newRanks: 1,
       itemBonus: 0,
@@ -1319,6 +1358,7 @@ export default function RolemasterCharacterSheetEngine() {
   const addCharacter = () => {
     const entry: CharacterEntry = { id: uid("char"), sheet: makeDefaultSheet() };
     setCharacters((prev) => [...prev, entry]);
+    // marker-add
     setActiveId(entry.id);
     setExpandedMobileSkillId(null);
     setEditingSkillId(null);
@@ -1331,7 +1371,7 @@ export default function RolemasterCharacterSheetEngine() {
     setExtraStatRolls([]);
     setTrainingPackageSpendName("");
     setTrainingPackageSpendCost(0);
-    setTalentInput(""); setFlawInput(""); setDraggedSkillIndex(null);
+    setTalentInput(""); setFlawInput(""); setDraggedSkillId(null);
     setDraggedGearIndex(null);
   };
 
@@ -1345,6 +1385,7 @@ export default function RolemasterCharacterSheetEngine() {
   };
 
   const switchCharacter = (id: string) => {
+    // marker-switch
     transitionDir.current = "fade";
     setTransitionKey((k) => k + 1);
     setActiveId(id);
@@ -1359,7 +1400,7 @@ export default function RolemasterCharacterSheetEngine() {
     setExtraStatRolls([]);
     setTrainingPackageSpendName("");
     setTrainingPackageSpendCost(0);
-    setTalentInput(""); setFlawInput(""); setDraggedSkillIndex(null);
+    setTalentInput(""); setFlawInput(""); setDraggedSkillId(null);
     setDraggedGearIndex(null);
   };
 
@@ -1535,20 +1576,22 @@ export default function RolemasterCharacterSheetEngine() {
   const openSpellCastingAssistant = (listId: string, spellId: string) => {
     setSelectedCastListId(listId);
     setSelectedCastSpellId(spellId);
+    setCastUseFreeSpell(false);
     setIsCastAssistantOpen(true);
   };
 
   const castSelectedSpell = () => {
     if (!selectedCastSpell) return;
+    const ppSpent = castUseFreeSpell ? 0 : castPpCost;
     updateSheet((prev) => ({
       ...prev,
       magic: {
         ...prev.magic,
-        currentPP: clampNumber(prev.magic.currentPP + castPpCost),
+        currentPP: clampNumber(prev.magic.currentPP + ppSpent),
       },
     }));
     setLastCastSummary(
-      `${selectedCastSpell.name} cast at ${signed(castTotalModifier)}. PP spent: ${castPpCost}.`,
+      `${selectedCastSpell.name} cast at ${signed(castTotalModifier)}. PP spent: ${ppSpent}${castUseFreeSpell ? " (free spell used)" : ""}.`,
     );
     setIsCastAssistantOpen(false);
   };
@@ -1773,7 +1816,7 @@ export default function RolemasterCharacterSheetEngine() {
 
   return (
     <div
-      className="min-h-screen overflow-x-hidden bg-gradient-to-b from-pink-50 via-white to-fuchsia-50 p-3 pb-24 md:p-6 md:pb-6"
+      className="min-h-screen bg-gradient-to-b from-pink-50 via-white to-fuchsia-50 p-3 pb-24 md:p-6 md:pb-6"
       onTouchStart={handleTabSwipeStart}
       onTouchEnd={handleTabSwipeEnd}
       onTouchCancel={() => { touchStartRef.current = null; }}
@@ -1811,7 +1854,7 @@ export default function RolemasterCharacterSheetEngine() {
         </div>
 
         <Tabs defaultValue="front" value={activeTab} onValueChange={(next) => navigateToTab(next as ActiveView)} className="min-w-0 space-y-4">
-          <TabsList id="section-tabs-strip" className="flex h-auto w-full min-w-0 gap-2 overflow-x-auto rounded-3xl bg-white/80 p-2 shadow-sm" data-no-tab-swipe="true">
+          <TabsList id="section-tabs-strip" className="sticky top-0 z-40 flex h-auto w-full min-w-0 gap-2 overflow-x-auto rounded-3xl bg-white/95 p-2 shadow-sm backdrop-blur" data-no-tab-swipe="true">
             {TAB_OPTIONS.map((tab) => (
               <TabsTrigger key={tab.value} value={tab.value} data-tab-value={tab.value} className="whitespace-nowrap rounded-2xl">{tab.label}</TabsTrigger>
             ))}
@@ -1870,6 +1913,7 @@ export default function RolemasterCharacterSheetEngine() {
                       <span className="shrink-0 whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-slate-500">DB</span>
                       <span className="shrink-0 whitespace-nowrap font-medium tabular-nums text-slate-900">{totalNormalDB}</span>
                       <span className="min-w-0 whitespace-nowrap text-[10px] text-slate-500 sm:text-xs">subtracted from attacks</span>
+                      <Button type="button" variant="outline" className="ml-auto h-7 rounded-xl px-2 text-xs" onClick={() => setIsHealingModalOpen(true)}>Passive Healing</Button>
                     </div>
                   </div>
                 </div>
@@ -2439,13 +2483,17 @@ export default function RolemasterCharacterSheetEngine() {
                   ))}
                   <Separator className="md:col-span-2" />
                   {[
-                    ["nationality", "Nationality"], ["hometown", "Home town/city"], ["deity", "Deity"], ["patronLord", "Patron/lord"], ["parents", "Parents"], ["spouse", "Spouse"], ["children", "Children"], ["other", "Other"],
+                    ["nationality", "Nationality"], ["hometown", "Home town/city"], ["deity", "Deity"], ["patronLord", "Patron/lord"], ["parents", "Parents"], ["spouse", "Spouse"], ["children", "Children"],
                   ].map(([key, label]) => (
-                    <div key={key} className={key === "other" || key === "parents" || key === "children" ? "md:col-span-2" : ""}>
+                    <div key={key} className={key === "parents" || key === "children" ? "md:col-span-2" : ""}>
                       <label className="mb-1 block text-sm">{label}</label>
                       <Input value={(sheet.background as any)[key]} onChange={(e) => updateSheet((prev) => ({ ...prev, background: { ...prev.background, [key]: e.target.value } }))} />
                     </div>
                   ))}
+                  <div className="md:col-span-2">
+                    <label className="mb-1 block text-sm">Notes</label>
+                    <Textarea rows={5} value={sheet.background.other} onChange={(e) => updateSheet((prev) => ({ ...prev, background: { ...prev.background, other: e.target.value } }))} />
+                  </div>
                 </div>
               </SectionCard>
 
@@ -3513,34 +3561,37 @@ export default function RolemasterCharacterSheetEngine() {
           </TabsContent>
 
           <TabsContent value="categories" className="space-y-4">
-            <div className="grid gap-4">
-              <SectionCard title="Skill Categories">
-                <div className="space-y-3 md:hidden">
-                  {categoryDerived.map((cat) => (
-                    <div key={cat.id} className="rounded-2xl border p-3">
-                      <button type="button" className="w-full text-left" onClick={() => setExpandedMobileCategoryId((prev) => prev === cat.id ? null : cat.id)}>
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="font-medium">{cat.name}</div>
-                            <div className="text-xs text-slate-500">{cat.applicableStatsDisplay}</div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge className="rounded-md px-2 py-0 text-[11px]">{formatProgressionType(cat.progressionType)}</Badge>
-                            {expandedMobileCategoryId === cat.id ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
-                          </div>
-                        </div>
-                        <div className="mt-3 grid grid-cols-4 gap-2 rounded-2xl bg-slate-50 p-3 text-center text-sm">
-                          <div><div className="text-xs text-slate-500">Stats</div><div className="font-semibold">{cat.applicableStatsDisplay}</div></div>
-                          <div>
-                            <div className="text-xs text-slate-500">Dev</div>
-                            <div className="font-semibold">{formatDevelopmentCostPath(cat.developmentCost, cat.ranks) || "—"}</div>
-                          </div>
-                          <div><div className="text-xs text-slate-500">Ranks</div><div className="font-semibold">{canEditCategoryNewRanks(cat.progressionType) ? cat.ranks : "—"}</div></div>
-                          <div><div className="text-xs text-slate-500">Total</div><div className="font-semibold">{cat.total}</div></div>
-                        </div>
-                      </button>
-                      {expandedMobileCategoryId === cat.id && (
-                      <div className="mt-3 grid gap-3">
+            <div className="space-y-3">
+              {categoryDerived.map((cat) => {
+                const isExpanded = expandedMobileCategoryId === cat.id;
+                const catSkills = skillDerived.filter((skill) => skill.categoryId === cat.id);
+                return (
+                  <div
+                    key={cat.id}
+                    className={`overflow-hidden rounded-2xl border bg-white shadow-sm ${draggedSkillId ? "ring-1 ring-emerald-200" : ""}`}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => {
+                      if (!draggedSkillId) return;
+                      updateSkill(draggedSkillId, { categoryId: cat.id });
+                      setDraggedSkillId(null);
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                      onClick={() => setExpandedMobileCategoryId((prev) => prev === cat.id ? null : cat.id)}
+                    >
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-800">{cat.name}</div>
+                        <div className="text-xs text-slate-500">{cat.applicableStatsDisplay} · {formatProgressionType(cat.progressionType)} · {catSkills.length} skill{catSkills.length === 1 ? "" : "s"}</div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-3 text-sm text-slate-600">
+                        <span>Total: <span className="font-semibold text-slate-900">{cat.total}</span></span>
+                        {isExpanded ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
+                      </div>
+                    </button>
+                    {isExpanded && (
+                      <div className="space-y-4 border-t p-3">
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div>
                             <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Dev Cost</label>
@@ -3592,256 +3643,59 @@ export default function RolemasterCharacterSheetEngine() {
                           <div><div className="text-xs text-slate-500">Prof</div><div className="font-semibold">{cat.professionBonus}</div></div>
                           <div><div className="text-xs text-slate-500">Total</div><div className="font-semibold">{cat.total}</div></div>
                         </div>
-                      </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <ScrollArea className="hidden rounded-2xl border md:block md:h-[calc(100vh-360px)]">
-                <div className="min-w-[1050px] p-3">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="py-2 px-2">Category</th>
-                        <th className="px-2">Applicable Stats</th>
-                        <th className="px-2">Dev Cost</th>
-                        <th className="px-2"># Ranks</th>
-                        <th className="px-2">New Ranks</th>
-                        <th className="px-2">Type</th>
-                        <th className="px-2">Rank</th>
-                        <th className="px-2">Stat</th>
-                        <th className="px-2">Profession</th>
-                        <th className="px-2">Special</th>
-                        <th className="px-2">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {categoryDerived.map((cat) => (
-                        <tr key={cat.id} className="border-b align-middle">
-                          <td className="py-2 px-2 font-medium">
-                            {cat.name}
-                            <div className="mt-1 text-xs text-slate-500">{formatProgression(cat.progression)}</div>
-                            {(cat.progressionType === "bodyDevelopment" || cat.progressionType === "powerPointDevelopment") && (
-                              <div className="mt-1 flex items-center gap-1">
-                                <span className="text-xs text-slate-400">+</span>
-                                <NumberInput value={cat.developmentPointBonus ?? 0} className="w-14 h-7 text-xs" onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, developmentPointBonus: v || undefined } : c) }))} />
-                                <span className="text-xs text-slate-400">/ rank</span>
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-2 text-xs font-mono">{cat.applicableStatsDisplay}</td>
-                          <td className="px-2">
-                            {isBandedDevelopmentCost(cat.developmentCost) ? (
-                              <div className="min-w-[180px]">
-                                <div className="font-medium">{formatDevelopmentCostPath(cat.developmentCost, cat.ranks)}</div>
-                                <div className="mt-1 text-xs text-slate-500">{formatDevelopmentCostSchedule(cat.developmentCost)}</div>
-                              </div>
-                            ) : (
-                              <Input value={cat.developmentCost} className="w-16 h-8" placeholder="2/5" onChange={(e) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, developmentCost: e.target.value } : c) }))} />
-                            )}
-                          </td>
-                          <td className="px-2">
-                            {canEditCategoryNewRanks(cat.progressionType) ? (
-                              <NumberInput value={cat.ranks} className="w-14" onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, ranks: clampNumber(v) } : c) }))} />
-                            ) : (
-                              <span className="text-slate-400">—</span>
-                            )}
-                          </td>
-                          <td className="px-2">
-                            {canEditCategoryNewRanks(cat.progressionType) ? (
-                              <RankCheckboxes value={cat.newRanks} onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, newRanks: v } : c) }))} />
-                            ) : (
-                              <span className="text-slate-400">—</span>
-                            )}
-                          </td>
-                          <td className="px-2"><Badge className="rounded-md px-2 py-0 text-[11px]">{formatProgressionType(cat.progressionType)}</Badge></td>
-                          <td className="px-2">{cat.rank}</td>
-                          <td className="px-2">{cat.stat}</td>
-                          <td className="px-2"><NumberInput value={cat.professionBonus} className="w-14" onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, professionBonus: v } : c) }))} /></td>
-                          <td className="px-2"><NumberInput value={cat.specialBonus} className="w-14" onChange={(v) => updateSheet((prev) => ({ ...prev, skillCategories: prev.skillCategories.map((c) => c.id === cat.id ? { ...c, specialBonus: v } : c) }))} /></td>
-                          <td className="px-2 font-semibold">{cat.total}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </ScrollArea>
-            </SectionCard>
-            </div>
-          </TabsContent>
 
-          <TabsContent value="skills" className="space-y-4">
-            <div className="grid gap-4">
-              <SectionCard title="Skills" action={<Button variant="outline" className="rounded-2xl h-8 px-3 text-sm" onClick={addSkillFromSkillsTab}><Plus className="mr-1 h-3 w-3" />Add Skill</Button>}>
-                <div className="space-y-3 md:hidden">
-                  {skillDerived.map((skill, idx) => (
-                    <div
-                      key={skill.id}
-                      className={`rounded-2xl border bg-white p-3 ${draggedSkillIndex === idx ? "opacity-50" : ""}`}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={() => {
-                        if (draggedSkillIndex === null || draggedSkillIndex === idx) return;
-                        updateSheet((prev) => {
-                          const next = [...prev.skills];
-                          const [removed] = next.splice(draggedSkillIndex, 1);
-                          next.splice(idx, 0, removed);
-                          return { ...prev, skills: next };
-                        });
-                        setDraggedSkillIndex(null);
-                      }}
-                      onDragEnd={() => setDraggedSkillIndex(null)}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <button
-                          type="button"
-                          className="min-w-0 flex-1 text-left"
-                          onClick={() => setExpandedMobileSkillId((prev) => prev === skill.id ? null : skill.id)}
-                        >
-                          <div className="font-medium">{skill.name || `Skill ${idx + 1}`}</div>
-                          <div className="mt-1 text-xs text-slate-500">{skill.category?.name || "No category"}</div>
-                          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600">
-                            <span>Ranks {skill.ranks}</span>
-                            <span>Bonus {skill.total >= 0 ? "+" : ""}{skill.total}</span>
-                            {isWeaponCategory(skill.category?.name ?? "") && <span>Fumble {skill.fumble || "—"}</span>}
-                          </div>
-                        </button>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            draggable
-                            className="h-8 rounded-xl px-2 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                            title="Drag to reorder"
-                            onDragStart={() => setDraggedSkillIndex(idx)}
-                            onDragEnd={() => setDraggedSkillIndex(null)}
-                          >
-                            ::
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-full p-1"
-                            onClick={() => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, favorite: !s.favorite } : s) }))}
-                            title="Favorite"
-                          >
-                            <Star className={`h-5 w-5 ${skill.favorite ? "fill-current text-yellow-500" : "text-slate-300"}`} />
-                          </button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="h-8 rounded-xl px-2 text-xs"
-                            onClick={() => setEditingSkillId(skill.id)}
-                          >Edit</Button>
-                          <Button type="button" variant="ghost" size="icon" onClick={() => {
-                            setExpandedMobileSkillId((prev) => prev === skill.id ? null : prev);
-                            setEditingSkillId((prev) => prev === skill.id ? null : prev);
-                            updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== skill.id) }));
-                          }}><Trash2 className="h-4 w-4" /></Button>
+                        <Separator />
+
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Skills in this category</div>
+                          <Button type="button" variant="outline" className="h-8 rounded-2xl px-3 text-xs" onClick={() => addSkillFromSkillsTab(cat.id)}><Plus className="mr-1 h-3 w-3" />Add Skill</Button>
                         </div>
-                      </div>
-                      {expandedMobileSkillId === skill.id && (
-                        <>
-                      <div className="mt-3 grid gap-2 rounded-xl bg-slate-50 p-3 text-sm sm:grid-cols-2">
-                        <div><span className="text-slate-500">Category:</span> <span className="font-medium text-slate-800">{skill.category?.name || "No category"}</span></div>
-                        <div><span className="text-slate-500">New Ranks:</span> <span className="font-medium text-slate-800">{sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? "Restricted" : skill.newRanks}</span></div>
-                        <div><span className="text-slate-500">Item Bonus:</span> <span className="font-medium text-slate-800">{skill.itemBonus >= 0 ? "+" : ""}{skill.itemBonus}</span></div>
-                        <div><span className="text-slate-500">Special Bonus:</span> <span className="font-medium text-slate-800">{skill.specialBonus >= 0 ? "+" : ""}{skill.specialBonus}</span></div>
-                        <div><span className="text-slate-500">Rank:</span> <span className="font-medium text-slate-800">{skill.rank}</span></div>
-                        <div><span className="text-slate-500">Category Total:</span> <span className="font-medium text-slate-800">{skill.categoryTotal >= 0 ? "+" : ""}{skill.categoryTotal}</span></div>
-                        {isWeaponCategory(skill.category?.name ?? "") && (
-                          <>
-                            <div><span className="text-slate-500">Fumble:</span> <span className="font-medium text-slate-800">{skill.fumble || "—"}</span></div>
-                            <div><span className="text-slate-500">Range Mods:</span> <span className="font-medium text-slate-800">{skill.rangeModifications || "—"}</span></div>
-                          </>
-                        )}
-                      </div>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <ScrollArea className="hidden rounded-2xl border md:block md:h-[calc(100vh-360px)]">
-                <div className="min-w-[1100px] p-3">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="py-2 px-2"></th>
-                        <th className="py-2 px-2">Fav</th>
-                        <th className="px-2">Skill</th>
-                        <th className="px-2">Category</th>
-                        <th className="px-2"># Ranks</th>
-                        <th className="px-2">New Ranks</th>
-                        <th className="px-2">Rank</th>
-                        <th className="px-2">Category</th>
-                        <th className="px-2">Item</th>
-                        <th className="px-2">Special</th>
-                        <th className="px-2">Total</th>
-                        <th className="px-2"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {skillDerived.map((skill, idx) => (
-                        <tr
-                          key={skill.id}
-                          className={`border-b align-middle${draggedSkillIndex === idx ? " opacity-50" : ""}`}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={() => {
-                            if (draggedSkillIndex === null || draggedSkillIndex === idx) return;
-                            updateSheet((prev) => {
-                              const next = [...prev.skills];
-                              const [removed] = next.splice(draggedSkillIndex, 1);
-                              next.splice(idx, 0, removed);
-                              return { ...prev, skills: next };
-                            });
-                            setDraggedSkillIndex(null);
-                          }}
-                          onDragEnd={() => setDraggedSkillIndex(null)}
-                        >
-                          <td className="py-2 px-2">
-                            <button
-                              type="button"
-                              draggable
-                              className="cursor-grab text-slate-400 hover:text-slate-700"
-                              title="Drag to reorder"
-                              onDragStart={() => setDraggedSkillIndex(idx)}
-                              onDragEnd={() => setDraggedSkillIndex(null)}
-                            >
-                              ::
-                            </button>
-                          </td>
-                          <td className="py-2 px-2"><button onClick={() => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, favorite: !s.favorite } : s) }))}><Star className={`h-4 w-4 ${skill.favorite ? "fill-current text-yellow-500" : "text-slate-300"}`} /></button></td>
-                          <td className="px-2">
-                            <div className="font-medium text-slate-800">{skill.name || "(Unnamed Skill)"}</div>
-                            {isWeaponCategory(skill.category?.name ?? "") && (
-                              <div className="mt-1 text-xs text-slate-500">
-                                Fumble: {skill.fumble || "—"} | Range: {skill.rangeModifications || "—"}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-2">{skill.category?.name ?? "No category"}</td>
-                          <td className="px-2 tabular-nums">{skill.ranks}</td>
-                          <td className="px-2 tabular-nums">
-                            {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? "Restricted" : skill.newRanks}
-                          </td>
-                          <td className="px-2">{skill.rank}</td>
-                          <td className="px-2">{skill.categoryTotal}</td>
-                          <td className="px-2 tabular-nums">{skill.itemBonus >= 0 ? "+" : ""}{skill.itemBonus}</td>
-                          <td className="px-2 tabular-nums">{skill.specialBonus >= 0 ? "+" : ""}{skill.specialBonus}</td>
-                          <td className="px-2 font-semibold">{skill.total}</td>
-                          <td className="px-2">
-                            <div className="flex items-center gap-1">
-                              <Button variant="outline" className="h-8 rounded-xl px-2 text-xs" onClick={() => setEditingSkillId(skill.id)}>Edit</Button>
-                              <Button variant="ghost" size="icon" onClick={() => {
-                                setEditingSkillId((prev) => prev === skill.id ? null : prev);
-                                updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== skill.id) }));
-                              }}><Trash2 className="h-4 w-4" /></Button>
+                        {catSkills.length === 0
+                          ? <div className="text-sm text-slate-500">No skills yet. Drag a skill here to move it into this category.</div>
+                          : (
+                            <div className="space-y-2">
+                              {catSkills.map((skill) => (
+                                <div
+                                  key={skill.id}
+                                  draggable
+                                  onDragStart={() => setDraggedSkillId(skill.id)}
+                                  onDragEnd={() => setDraggedSkillId(null)}
+                                  className={`flex items-center gap-2 rounded-xl border bg-white px-3 py-2 text-sm ${draggedSkillId === skill.id ? "opacity-50" : ""}`}
+                                >
+                                  <span className="shrink-0 cursor-grab text-slate-400" title="Drag to move to another category">::</span>
+                                  <button
+                                    type="button"
+                                    className="rounded-full p-1"
+                                    onClick={() => updateSheet((prev) => ({ ...prev, skills: prev.skills.map((s) => s.id === skill.id ? { ...s, favorite: !s.favorite } : s) }))}
+                                    title="Favorite"
+                                  >
+                                    <Star className={`h-4 w-4 ${skill.favorite ? "fill-current text-yellow-500" : "text-slate-300"}`} />
+                                  </button>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate font-medium text-slate-800">{skill.name || "(Unnamed Skill)"}</div>
+                                    <div className="flex flex-wrap gap-x-3 text-xs text-slate-500">
+                                      <span>Ranks {skill.ranks}</span>
+                                      <span>New Ranks {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === skill.name.toLowerCase()) ? "Restricted" : skill.newRanks}</span>
+                                      <span>Bonus {skill.total >= 0 ? "+" : ""}{skill.total}</span>
+                                      {isWeaponCategory(skill.category?.name ?? "") && <span>Fumble {skill.fumble || "—"}</span>}
+                                    </div>
+                                  </div>
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    <Button type="button" variant="outline" className="h-8 rounded-xl px-2 text-xs" onClick={() => setEditingSkillId(skill.id)}>Edit</Button>
+                                    <Button type="button" variant="ghost" size="icon" onClick={() => {
+                                      setEditingSkillId((prev) => prev === skill.id ? null : prev);
+                                      updateSheet((prev) => ({ ...prev, skills: prev.skills.filter((s) => s.id !== skill.id) }));
+                                    }}><Trash2 className="h-4 w-4" /></Button>
+                                  </div>
+                                </div>
+                              ))}
                             </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </ScrollArea>
-              </SectionCard>
+                          )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             {editingSkill && (
               <div
@@ -3942,15 +3796,42 @@ export default function RolemasterCharacterSheetEngine() {
               const groups = LIST_TYPE_ORDER
                 .map((type) => ({ type, lists: spellTabLists.filter((l) => l.entry.type === type) }))
                 .filter((g) => g.lists.length > 0);
+              const modifiersCard = (
+                <div className="rounded-2xl border bg-white p-3">
+                  <div className="mb-2 text-sm font-medium text-slate-700">Spell Casting Modifiers</div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm">Spell Adder (free spells per day)</label>
+                      <Input
+                        type="text"
+                        value={sheet.magic.spellAdder}
+                        onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellAdder: e.target.value } }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm">Spell Multiplier (applied to total PP)</label>
+                      <Input
+                        type="text"
+                        value={sheet.magic.spellMultiplier}
+                        onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellMultiplier: e.target.value } }))}
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
               if (groups.length === 0) {
                 return (
-                  <div className="rounded-2xl border bg-white p-6 text-center text-sm text-slate-500">
-                    No spell lists yet. Add spell list skills under the Skills tab to see them here.
+                  <div className="space-y-4">
+                    {modifiersCard}
+                    <div className="rounded-2xl border bg-white p-6 text-center text-sm text-slate-500">
+                      No spell lists yet. Add spell list skills under the Skills tab to see them here.
+                    </div>
                   </div>
                 );
               }
               return (
                 <div className="space-y-6">
+                  {modifiersCard}
                   {groups.map(({ type, lists }) => (
                     <div key={type} className="space-y-3">
                       <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">{type} Lists</h3>
@@ -4139,27 +4020,6 @@ export default function RolemasterCharacterSheetEngine() {
                       </ul>
                     </div>
                   )}
-                  <div className="rounded-2xl border bg-white p-3">
-                    <div className="mb-2 text-sm font-medium text-slate-700">Spell Casting Modifiers</div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-sm">Spell Adder</label>
-                        <Input
-                          type="text"
-                          value={sheet.magic.spellAdder}
-                          onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellAdder: e.target.value } }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-sm">Spell Multiplier</label>
-                        <Input
-                          type="text"
-                          value={sheet.magic.spellMultiplier}
-                          onChange={(e) => updateSheet((prev) => ({ ...prev, magic: { ...prev.magic, spellMultiplier: e.target.value } }))}
-                        />
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </SectionCard>
 
@@ -4441,6 +4301,48 @@ export default function RolemasterCharacterSheetEngine() {
         </div>
       )}
 
+      {isHealingModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"
+          data-no-tab-swipe="true"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setIsHealingModalOpen(false); }}
+        >
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 text-base font-semibold text-slate-900">Passive Healing</div>
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Hours Passed</label>
+                <NumberInput value={healingHours} min={0} onChange={(v) => setHealingHours(Math.max(0, v))} />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Activity</label>
+                <div className="flex gap-2">
+                  {(["active", "resting", "sleeping"] as const).map((level) => (
+                    <Button
+                      key={level}
+                      type="button"
+                      variant={healingActivity === level ? "default" : "outline"}
+                      className="flex-1 rounded-2xl capitalize"
+                      onClick={() => setHealingActivity(level)}
+                    >
+                      {level}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-600 space-y-1">
+                <div className="flex justify-between"><span>Hits healed</span><span className="font-semibold text-slate-900">{healingTotalHits}</span></div>
+                <div className="flex justify-between"><span>PP healed</span><span className="font-semibold text-slate-900">{healingTotalPP}</span></div>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setIsHealingModalOpen(false)}>Cancel</Button>
+              <Button type="button" className="rounded-2xl" onClick={applyPassiveHealing}>Apply Healing</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isCastAssistantOpen && selectedCastList && selectedCastSpell && (
         <div
           className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
@@ -4481,8 +4383,15 @@ export default function RolemasterCharacterSheetEngine() {
                   <div>Realm: <span className="font-semibold">{castRealm}</span></div>
                   <div>Level Delta: <span className="font-semibold">{castLevelDelta}</span></div>
                   <div>Instant: <span className="font-semibold">{castIsInstantaneous ? "Yes" : "No"}</span></div>
-                  <div>PP Cost: <span className="font-semibold">{castPpCost}</span></div>
+                  <div>PP Cost: <span className="font-semibold">{castUseFreeSpell ? 0 : castPpCost}</span></div>
                 </div>
+
+                {spellAdderValue > 0 && castPpCost > 0 && (
+                  <label className="flex items-center gap-2 rounded-2xl border bg-white p-3 text-sm">
+                    <Checkbox checked={castUseFreeSpell} onChange={(e) => setCastUseFreeSpell(e.target.checked)} />
+                    Use a free spell from Spell Adder ({spellAdderValue}/day) instead of spending PP
+                  </label>
+                )}
 
                 <div className="grid gap-2 md:grid-cols-4">
                   <div>
@@ -4581,7 +4490,7 @@ export default function RolemasterCharacterSheetEngine() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-slate-600">PP used: {sheet.magic.currentPP} / {totalPP}</div>
                   <Button type="button" className="rounded-2xl" disabled={!selectedCastSpell} onClick={castSelectedSpell}>
-                    Cast Spell and Spend {castPpCost} PP
+                    {castUseFreeSpell ? "Cast Spell (Free)" : `Cast Spell and Spend ${castPpCost} PP`}
                   </Button>
                 </div>
                 {lastCastSummary && <div className="text-sm text-slate-600">{lastCastSummary}</div>}
