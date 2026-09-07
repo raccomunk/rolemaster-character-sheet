@@ -3715,89 +3715,6 @@ export default function RolemasterCharacterSheetEngine() {
                 );
               })}
             </div>
-            {editingSkill && (
-              <div
-                className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
-                onMouseDown={(event) => {
-                  skillModalBackdropMouseDownRef.current = event.target === event.currentTarget;
-                }}
-                onMouseUp={(event) => {
-                  const shouldClose = skillModalBackdropMouseDownRef.current && event.target === event.currentTarget;
-                  skillModalBackdropMouseDownRef.current = false;
-                  if (shouldClose) setEditingSkillId(null);
-                }}
-                onMouseLeave={() => {
-                  skillModalBackdropMouseDownRef.current = false;
-                }}
-              >
-                <div className="mx-auto w-full max-w-3xl" onClick={(event) => event.stopPropagation()}>
-                  <SectionCard
-                    title="Edit Skill"
-                    action={(
-                      <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setEditingSkillId(null)}>
-                        Close
-                      </Button>
-                    )}
-                  >
-                    <div className="space-y-3">
-                      <div>
-                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Skill Name</label>
-                        <Input value={editingSkill.name} placeholder="Skill name" onChange={(e) => updateSkill(editingSkill.id, { name: e.target.value })} />
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Category</label>
-                          <Select value={editingSkill.categoryId} onValueChange={(v) => updateSkill(editingSkill.id, { categoryId: v })}>
-                            <SelectTrigger><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {[...sheet.skillCategories].sort((a, b) => a.name.localeCompare(b.name)).map((cat) => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Ranks</label>
-                          <NumberInput value={editingSkill.ranks} onChange={(v) => updateSkill(editingSkill.id, { ranks: clampNumber(v) })} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Item Bonus</label>
-                          <NumberInput value={editingSkill.itemBonus} onChange={(v) => updateSkill(editingSkill.id, { itemBonus: v })} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Special Bonus</label>
-                          <NumberInput value={editingSkill.specialBonus} onChange={(v) => updateSkill(editingSkill.id, { specialBonus: v })} />
-                        </div>
-                      </div>
-                      {isWeaponCategory(editingSkill.category?.name ?? "") && (
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div>
-                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Fumble</label>
-                            <Input value={editingSkill.fumble} onChange={(e) => updateSkill(editingSkill.id, { fumble: e.target.value })} />
-                          </div>
-                          <div>
-                            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Range Mods</label>
-                            <Input value={editingSkill.rangeModifications} onChange={(e) => updateSkill(editingSkill.id, { rangeModifications: e.target.value })} />
-                          </div>
-                        </div>
-                      )}
-                      <div className="flex flex-wrap items-end justify-between gap-3">
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">New Ranks</label>
-                          {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === editingSkill.name.toLowerCase()) ? (
-                            <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Restricted</span>
-                          ) : (
-                            <RankCheckboxes value={editingSkill.newRanks} onChange={(v) => updateSkill(editingSkill.id, { newRanks: v })} />
-                          )}
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-3 text-center text-sm">
-                          <div><div className="text-xs text-slate-500">Rank</div><div className="font-semibold">{editingSkill.rank}</div></div>
-                          <div><div className="text-xs text-slate-500">Total</div><div className="font-semibold">{editingSkill.total >= 0 ? "+" : ""}{editingSkill.total}</div></div>
-                        </div>
-                      </div>
-                    </div>
-                  </SectionCard>
-                </div>
-              </div>
-            )}
           </TabsContent>
 
           <TabsContent value="spells" className="space-y-4">
@@ -4063,54 +3980,6 @@ export default function RolemasterCharacterSheetEngine() {
                 </div>
               </SectionCard>
             </div>
-            {editingGearItem && (
-              <div
-                className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
-                onMouseDown={(event) => {
-                  gearModalBackdropMouseDownRef.current = event.target === event.currentTarget;
-                }}
-                onMouseUp={(event) => {
-                  const shouldClose = gearModalBackdropMouseDownRef.current && event.target === event.currentTarget;
-                  gearModalBackdropMouseDownRef.current = false;
-                  if (shouldClose) setEditingGearItemId(null);
-                }}
-                onMouseLeave={() => {
-                  gearModalBackdropMouseDownRef.current = false;
-                }}
-              >
-                <div className="mx-auto w-full max-w-2xl" onClick={(event) => event.stopPropagation()}>
-                  <SectionCard
-                    title="Edit Equipment Item"
-                    action={(
-                      <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setEditingGearItemId(null)}>
-                        Close
-                      </Button>
-                    )}
-                  >
-                    <div className="grid gap-3">
-                      <div>
-                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Item Name</label>
-                        <Input placeholder="Item name" value={editingGearItem.name} onChange={(e) => updateGearItem(editingGearItem.id, { name: e.target.value })} />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Description</label>
-                        <Textarea placeholder="Description" value={editingGearItem.description} onChange={(e) => updateGearItem(editingGearItem.id, { description: e.target.value })} />
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-[1fr_160px]">
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Location</label>
-                          <Input placeholder="Location" value={editingGearItem.location} onChange={(e) => updateGearItem(editingGearItem.id, { location: e.target.value })} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Weight</label>
-                          <NumberInput value={editingGearItem.weight} onChange={(v) => updateGearItem(editingGearItem.id, { weight: v })} />
-                        </div>
-                      </div>
-                    </div>
-                  </SectionCard>
-                </div>
-              </div>
-            )}
           </TabsContent>
 
           <TabsContent value="backup" className="space-y-4">
@@ -4230,6 +4099,139 @@ export default function RolemasterCharacterSheetEngine() {
           </div>
         </Tabs>
       </div>
+
+      {editingSkill && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
+          onMouseDown={(event) => {
+            skillModalBackdropMouseDownRef.current = event.target === event.currentTarget;
+          }}
+          onMouseUp={(event) => {
+            const shouldClose = skillModalBackdropMouseDownRef.current && event.target === event.currentTarget;
+            skillModalBackdropMouseDownRef.current = false;
+            if (shouldClose) setEditingSkillId(null);
+          }}
+          onMouseLeave={() => {
+            skillModalBackdropMouseDownRef.current = false;
+          }}
+        >
+          <div className="mx-auto w-full max-w-3xl" onClick={(event) => event.stopPropagation()}>
+            <SectionCard
+              title="Edit Skill"
+              action={(
+                <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setEditingSkillId(null)}>
+                  Close
+                </Button>
+              )}
+            >
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Skill Name</label>
+                  <Input value={editingSkill.name} placeholder="Skill name" onChange={(e) => updateSkill(editingSkill.id, { name: e.target.value })} />
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Category</label>
+                    <Select value={editingSkill.categoryId} onValueChange={(v) => updateSkill(editingSkill.id, { categoryId: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {[...sheet.skillCategories].sort((a, b) => a.name.localeCompare(b.name)).map((cat) => <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Ranks</label>
+                    <NumberInput value={editingSkill.ranks} onChange={(v) => updateSkill(editingSkill.id, { ranks: clampNumber(v) })} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Item Bonus</label>
+                    <NumberInput value={editingSkill.itemBonus} onChange={(v) => updateSkill(editingSkill.id, { itemBonus: v })} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Special Bonus</label>
+                    <NumberInput value={editingSkill.specialBonus} onChange={(v) => updateSkill(editingSkill.id, { specialBonus: v })} />
+                  </div>
+                </div>
+                {isWeaponCategory(editingSkill.category?.name ?? "") && (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Fumble</label>
+                      <Input value={editingSkill.fumble} onChange={(e) => updateSkill(editingSkill.id, { fumble: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Range Mods</label>
+                      <Input value={editingSkill.rangeModifications} onChange={(e) => updateSkill(editingSkill.id, { rangeModifications: e.target.value })} />
+                    </div>
+                  </div>
+                )}
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">New Ranks</label>
+                    {sheet.details.restrictedSkills.some((r) => r.toLowerCase() === editingSkill.name.toLowerCase()) ? (
+                      <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Restricted</span>
+                    ) : (
+                      <RankCheckboxes value={editingSkill.newRanks} onChange={(v) => updateSkill(editingSkill.id, { newRanks: v })} />
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 rounded-2xl bg-slate-50 p-3 text-center text-sm">
+                    <div><div className="text-xs text-slate-500">Rank</div><div className="font-semibold">{editingSkill.rank}</div></div>
+                    <div><div className="text-xs text-slate-500">Total</div><div className="font-semibold">{editingSkill.total >= 0 ? "+" : ""}{editingSkill.total}</div></div>
+                  </div>
+                </div>
+              </div>
+            </SectionCard>
+          </div>
+        </div>
+      )}
+
+      {editingGearItem && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/40 px-3 pb-28 pt-8 sm:px-6 sm:pb-32 sm:pt-10 md:p-6"
+          onMouseDown={(event) => {
+            gearModalBackdropMouseDownRef.current = event.target === event.currentTarget;
+          }}
+          onMouseUp={(event) => {
+            const shouldClose = gearModalBackdropMouseDownRef.current && event.target === event.currentTarget;
+            gearModalBackdropMouseDownRef.current = false;
+            if (shouldClose) setEditingGearItemId(null);
+          }}
+          onMouseLeave={() => {
+            gearModalBackdropMouseDownRef.current = false;
+          }}
+        >
+          <div className="mx-auto w-full max-w-2xl" onClick={(event) => event.stopPropagation()}>
+            <SectionCard
+              title="Edit Equipment Item"
+              action={(
+                <Button type="button" variant="outline" className="h-8 rounded-xl px-3 text-xs" onClick={() => setEditingGearItemId(null)}>
+                  Close
+                </Button>
+              )}
+            >
+              <div className="grid gap-3">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Item Name</label>
+                  <Input placeholder="Item name" value={editingGearItem.name} onChange={(e) => updateGearItem(editingGearItem.id, { name: e.target.value })} />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Description</label>
+                  <Textarea placeholder="Description" value={editingGearItem.description} onChange={(e) => updateGearItem(editingGearItem.id, { description: e.target.value })} />
+                </div>
+                <div className="grid gap-3 md:grid-cols-[1fr_160px]">
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Location</label>
+                    <Input placeholder="Location" value={editingGearItem.location} onChange={(e) => updateGearItem(editingGearItem.id, { location: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">Weight</label>
+                    <NumberInput value={editingGearItem.weight} onChange={(v) => updateGearItem(editingGearItem.id, { weight: v })} />
+                  </div>
+                </div>
+              </div>
+            </SectionCard>
+          </div>
+        </div>
+      )}
 
       {poolEditModal && (
         <div
